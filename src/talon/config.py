@@ -58,7 +58,6 @@ class TalonSettings(BaseSettings):
     crosscheck_tolerance_pct: float = 0.1
 
     eod_investor_days: int = 30
-    backfill_sleep_seconds: float = 0.2
     backfill_years: int = 10
 
     @field_validator(
@@ -85,6 +84,10 @@ class TalonSettings(BaseSettings):
     @property
     def parquet_dir(self) -> Path:
         return self.data_dir / "parquet" / "kr"
+
+    @property
+    def marcap_cache_dir(self) -> Path:
+        return self.data_dir / "cache" / "marcap"
 
     @property
     def state_path(self) -> Path:

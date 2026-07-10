@@ -383,6 +383,14 @@ def doctor(live: bool) -> None:
             report("FDR KRX 스냅샷", not daily.is_empty(), f"{daily.height} rows")
         except Exception as exc:
             report("FDR KRX 스냅샷", False, str(exc))
+        try:
+            from talon.sources.marcap_daily import MarcapSource
+
+            with MarcapSource(cfg.marcap_cache_dir) as marcap:
+                latest = marcap.latest_available(today.year)
+            report("marcap", latest is not None, f"최신 {latest}")
+        except Exception as exc:
+            report("marcap", False, str(exc))
 
     if failures:
         sys.exit(1)
