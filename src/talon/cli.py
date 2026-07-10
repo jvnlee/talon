@@ -36,10 +36,11 @@ log = logging.getLogger(__name__)
 @click.version_option(__version__)
 def main(verbose: bool) -> None:
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
+        level=logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         stream=sys.stderr,
     )
+    logging.getLogger("talon").setLevel(logging.DEBUG if verbose else logging.INFO)
 
 
 def _make_toss(cfg: TalonSettings) -> TossClient:
@@ -375,6 +376,13 @@ def doctor(live: bool) -> None:
             report("FinanceDataReader", not frame.is_empty(), f"{frame.height} rows")
         except Exception as exc:
             report("FinanceDataReader", False, str(exc))
+        try:
+            from talon.sources.fdr_daily import fetch_krx_listing
+
+            daily, _ = fetch_krx_listing(cal.latest_trading_day(today))
+            report("FDR KRX 스냅샷", not daily.is_empty(), f"{daily.height} rows")
+        except Exception as exc:
+            report("FDR KRX 스냅샷", False, str(exc))
 
     if failures:
         sys.exit(1)

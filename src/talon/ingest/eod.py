@@ -7,6 +7,7 @@ from talon.config import TalonSettings
 from talon.data.state import StateDB
 from talon.data.store import (
     DAILY_CANDLES,
+    DAILY_SNAPSHOT_SCHEMA,
     INDICATOR_DAILY,
     INVESTOR_TRADING,
     MARKET_CAP,
@@ -21,6 +22,7 @@ from talon.markets.kr import KrxCalendar
 from talon.models import EodSummary
 from talon.notify.telegram import Alerter
 from talon.sources.crosscheck import crosscheck_daily
+from talon.sources.fdr_daily import fetch_krx_listing
 from talon.sources.krx_daily import fetch_daily_ohlcv, fetch_market_cap
 from talon.sources.toss import TossClient
 from talon.timeutil import KST, now_utc
@@ -51,27 +53,53 @@ def run_eod(
     run_id = state.start_job("eod")
     steps: dict[str, str] = {}
     try:
-        ohlcv = fetch_daily_ohlcv(day)
-    except SourceError as exc:
-        state.heartbeat("eod", False, {"error": str(exc)})
-        state.finish_job(run_id, False, {"error": str(exc)})
-        alerter.alert("eod-error", f"{day} 일봉 수집 실패 (pykrx): {exc}")
-        return EodSummary(status="error", day=day, steps={"daily": str(exc)})
+        summary = _run_eod_steps(cfg, state, snapshots, series, toss, alerter, day, steps)
+    except Exception as exc:
+        log.exception("eod failed")
+        state.heartbeat("eod", False, {"error": str(exc), "steps": steps})
+        state.finish_job(run_id, False, {"error": str(exc), "steps": steps})
+        alerter.alert("eod-error", f"{day} EOD 잡 실패: {exc}")
+        return EodSummary(status="error", day=day, steps=steps)
 
+    ok = summary.status == "ok"
+    detail = {"day": day.isoformat(), "steps": summary.steps}
+    state.heartbeat("eod", ok, detail)
+    state.finish_job(run_id, ok, detail)
+    if summary.status == "data-not-ready":
+        alerter.alert("eod-empty", f"{day} 일봉 데이터를 어느 소스에서도 확보하지 못했습니다")
+    return summary
+
+
+def _run_eod_steps(
+    cfg: TalonSettings,
+    state: StateDB,
+    snapshots: DatePartitionedStore,
+    series: ParquetStore,
+    toss: TossClient | None,
+    alerter: Alerter,
+    day: date,
+    steps: dict[str, str],
+) -> EodSummary:
+    ohlcv, caps, source = _load_daily_snapshots(cfg, day, toss, steps, alerter)
     if ohlcv.is_empty():
         steps["daily"] = "data-not-ready"
-        state.heartbeat("eod", False, {"steps": steps})
-        state.finish_job(run_id, False, {"steps": steps})
-        alerter.alert("eod-empty", f"{day} 일봉 데이터가 아직 비어 있습니다 (pykrx)")
         return EodSummary(status="data-not-ready", day=day, steps=steps)
 
     snapshots.write_date(DAILY_CANDLES, day, ohlcv)
-    steps["daily"] = f"{ohlcv.height} rows"
+    steps["daily"] = f"{ohlcv.height} rows ({source})"
+    if caps is not None and not caps.is_empty():
+        snapshots.write_date(MARKET_CAP, day, caps)
+        steps["marketcap"] = f"{caps.height} rows ({source})"
+        liquidity = caps.select("symbol", "value", "volume")
+    else:
+        liquidity = ohlcv.select("symbol", "value", "volume")
 
-    liquidity = _load_liquidity(cfg, snapshots, day, ohlcv, steps, alerter)
     _load_indicators(cfg, series, toss, steps)
     _load_investor_trading(cfg, series, toss, steps)
-    _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
+    if source == "pykrx":
+        _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
+    else:
+        steps["crosscheck"] = f"skipped ({source})"
 
     universe_size = 0
     try:
@@ -82,35 +110,80 @@ def run_eod(
         steps["universe"] = f"error: {exc}"
         alerter.alert("universe-error", f"{day} 유니버스 갱신 실패: {exc}")
 
-    ok = universe_size > 0
-    status = "ok" if ok else "degraded"
-    detail = {"day": day.isoformat(), "steps": steps}
-    state.heartbeat("eod", ok, detail)
-    state.finish_job(run_id, ok, detail)
+    status = "ok" if universe_size > 0 else "degraded"
     return EodSummary(status=status, day=day, steps=steps, universe_size=universe_size)
 
 
-def _load_liquidity(
+def _load_daily_snapshots(
     cfg: TalonSettings,
-    snapshots: DatePartitionedStore,
     day: date,
-    ohlcv: pl.DataFrame,
+    toss: TossClient | None,
     steps: dict[str, str],
     alerter: Alerter,
-) -> pl.DataFrame:
-    fallback = ohlcv.select("symbol", "value", "volume")
+) -> tuple[pl.DataFrame, pl.DataFrame | None, str]:
+    empty = pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA)
+    ohlcv = empty
     try:
-        caps = fetch_market_cap(day)
+        ohlcv = fetch_daily_ohlcv(day)
     except SourceError as exc:
-        steps["marketcap"] = f"error: {exc}"
-        alerter.alert("marketcap-error", f"{day} 시가총액 수집 실패: {exc}")
-        return fallback
-    if caps.is_empty():
-        steps["marketcap"] = "empty"
-        return fallback
-    snapshots.write_date(MARKET_CAP, day, caps)
-    steps["marketcap"] = f"{caps.height} rows"
-    return caps.select("symbol", "value", "volume")
+        steps["pykrx"] = f"error: {exc}"
+    if not ohlcv.is_empty():
+        caps: pl.DataFrame | None = None
+        try:
+            caps_frame = fetch_market_cap(day)
+            caps = caps_frame if not caps_frame.is_empty() else None
+        except SourceError as exc:
+            steps["marketcap"] = f"error: {exc}"
+            alerter.alert("marketcap-error", f"{day} 시가총액 수집 실패: {exc}")
+        return ohlcv, caps, "pykrx"
+
+    try:
+        listing_daily, listing_caps = fetch_krx_listing(day)
+    except SourceError as exc:
+        steps["fdr_listing"] = f"error: {exc}"
+        return empty, None, "none"
+    if listing_daily.is_empty():
+        steps["fdr_listing"] = "empty"
+        return empty, None, "none"
+    verdict = _matches_toss_close(listing_daily, day, toss)
+    if verdict is False:
+        steps["fdr_listing"] = "stale-or-mismatch"
+        return empty, None, "none"
+    suffix = "" if verdict else " (토스 표본 검증 불가)"
+    alerter.alert(
+        "eod-fallback",
+        f"{day} 일봉을 pykrx 대신 FDR 전종목 스냅샷으로 적재했습니다{suffix}",
+    )
+    return listing_daily, listing_caps, "fdr-listing"
+
+
+def _matches_toss_close(
+    frame: pl.DataFrame,
+    day: date,
+    toss: TossClient | None,
+    *,
+    sample: int = 3,
+    tolerance: float = 0.001,
+) -> bool | None:
+    if toss is None:
+        return None
+    top = frame.sort("value", descending=True).head(sample)
+    for row in top.iter_rows(named=True):
+        try:
+            page = toss.candles(row["symbol"], "1d", count=5, adjusted=False)
+        except SourceError as exc:
+            log.warning("toss verification unavailable for %s: %s", row["symbol"], exc)
+            return None
+        bar = next(
+            (c for c in page.candles if c.ts.astimezone(KST).date() == day),
+            None,
+        )
+        if bar is None:
+            return False
+        ours = float(row["close"])
+        if abs(ours - bar.close) / max(ours, bar.close, 1.0) > tolerance:
+            return False
+    return True
 
 
 def _load_indicators(

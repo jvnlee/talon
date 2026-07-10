@@ -13,7 +13,7 @@ from talon.data.store import (
 )
 from talon.errors import SourceError
 from talon.ingest.eod import run_eod
-from talon.models import InvestorFlowRecord
+from talon.models import CandlePage, InvestorFlowRecord
 from talon.sources.crosscheck import CrosscheckResult, Discrepancy
 
 DAY = date(2026, 7, 10)
@@ -65,8 +65,18 @@ def investor_record():
 
 
 class FakeToss:
-    def __init__(self):
+    def __init__(self, daily_close=None):
         self.indicator_calls = []
+        self.daily_close = daily_close or {}
+
+    def candles(self, symbol, interval, *, count=200, before=None, adjusted=False):
+        close = self.daily_close.get(symbol)
+        if close is None:
+            return CandlePage(candles=[], next_before=None)
+        return CandlePage(
+            candles=[make_candle(utc(2026, 7, 9, 15, 0), price=close)],
+            next_before=None,
+        )
 
     def candles_since(
         self, symbol, interval, since, *, max_pages=30, adjusted=False, indicator=False
@@ -81,10 +91,15 @@ class FakeToss:
         return []
 
 
+def _blocked_listing(day):
+    raise SourceError("krx listing blocked")
+
+
 @pytest.fixture
 def sources(monkeypatch):
     monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", lambda day: ohlcv_frame())
     monkeypatch.setattr("talon.ingest.eod.fetch_market_cap", lambda day: caps_frame())
+    monkeypatch.setattr("talon.ingest.eod.fetch_krx_listing", _blocked_listing)
     monkeypatch.setattr(
         "talon.ingest.eod.crosscheck_daily",
         lambda snapshot, day, sample, tolerance_pct: CrosscheckResult(checked=len(sample)),
@@ -137,6 +152,7 @@ def test_eod_data_not_ready(cfg, cal, state, snapshots, series, alerter, notifie
         "talon.ingest.eod.fetch_daily_ohlcv",
         lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
     )
+    monkeypatch.setattr("talon.ingest.eod.fetch_krx_listing", _blocked_listing)
     summary = run(cfg, cal, state, snapshots, series, alerter)
     assert summary.status == "data-not-ready"
     assert not snapshots.has_date(DAILY_CANDLES, DAY)
@@ -144,14 +160,83 @@ def test_eod_data_not_ready(cfg, cal, state, snapshots, series, alerter, notifie
     assert any("일봉 데이터" in text for text in notifier.sent)
 
 
-def test_eod_source_error(cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch):
+def test_eod_all_sources_down(cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch):
     def boom(day):
         raise SourceError("krx down")
 
     monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", boom)
+    monkeypatch.setattr("talon.ingest.eod.fetch_krx_listing", _blocked_listing)
+    summary = run(cfg, cal, state, snapshots, series, alerter)
+    assert summary.status == "data-not-ready"
+    assert "error" in summary.steps["pykrx"]
+    assert "error" in summary.steps["fdr_listing"]
+    assert any("어느 소스에서도" in text for text in notifier.sent)
+
+
+def test_eod_unexpected_error(cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch):
+    def boom(day):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", boom)
     summary = run(cfg, cal, state, snapshots, series, alerter)
     assert summary.status == "error"
-    assert any("일봉 수집 실패" in text for text in notifier.sent)
+    assert any("EOD 잡 실패" in text for text in notifier.sent)
+    assert state.recent_runs("eod")[0].ok is False
+
+
+def test_eod_falls_back_to_fdr_listing(
+    cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch
+):
+    monkeypatch.setattr(
+        "talon.ingest.eod.fetch_daily_ohlcv",
+        lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
+    )
+    monkeypatch.setattr(
+        "talon.ingest.eod.fetch_krx_listing", lambda day: (ohlcv_frame(), caps_frame())
+    )
+    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    toss = FakeToss(daily_close={"005930": 70500.0, "000660": 252000.0})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=toss)
+    assert summary.status == "ok"
+    assert "fdr-listing" in summary.steps["daily"]
+    assert summary.steps["crosscheck"] == "skipped (fdr-listing)"
+    assert snapshots.has_date(DAILY_CANDLES, DAY)
+    assert snapshots.has_date(MARKET_CAP, DAY)
+    assert state.latest_universe().symbols == ["005930", "000660"]
+    assert any("FDR 전종목 스냅샷" in text for text in notifier.sent)
+
+
+def test_eod_fallback_rejected_on_close_mismatch(
+    cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch
+):
+    monkeypatch.setattr(
+        "talon.ingest.eod.fetch_daily_ohlcv",
+        lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
+    )
+    monkeypatch.setattr(
+        "talon.ingest.eod.fetch_krx_listing", lambda day: (ohlcv_frame(), caps_frame())
+    )
+    toss = FakeToss(daily_close={"005930": 68000.0, "000660": 252000.0})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=toss)
+    assert summary.status == "data-not-ready"
+    assert summary.steps["fdr_listing"] == "stale-or-mismatch"
+    assert not snapshots.has_date(DAILY_CANDLES, DAY)
+
+
+def test_eod_fallback_unverified_without_toss(
+    cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch
+):
+    monkeypatch.setattr(
+        "talon.ingest.eod.fetch_daily_ohlcv",
+        lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
+    )
+    monkeypatch.setattr(
+        "talon.ingest.eod.fetch_krx_listing", lambda day: (ohlcv_frame(), caps_frame())
+    )
+    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=None)
+    assert summary.status == "ok"
+    assert any("검증 불가" in text for text in notifier.sent)
 
 
 def test_eod_crosscheck_mismatch_alerts(

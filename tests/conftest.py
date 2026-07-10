@@ -15,6 +15,7 @@ def _clean_talon_env(monkeypatch):
     for key in list(os.environ):
         if key.startswith("TALON_"):
             monkeypatch.delenv(key)
+    monkeypatch.setitem(TalonSettings.model_config, "env_file", None)
 
 
 @pytest.fixture

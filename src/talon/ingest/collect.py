@@ -14,6 +14,7 @@ from talon.ingest.universe import rebuild_universe
 from talon.markets.kr import KrxCalendar, within_session
 from talon.models import CollectSummary
 from talon.notify.telegram import Alerter
+from talon.sources.fdr_daily import fetch_krx_listing
 from talon.sources.krx_daily import fetch_market_cap
 from talon.sources.toss import TossClient, TossError
 from talon.timeutil import KST, minute_floor, now_utc
@@ -31,14 +32,26 @@ def bootstrap_universe(
     day: date,
     toss: TossClient | None,
 ) -> list[str]:
-    trading_day = cal.latest_trading_day(day)
+    latest = cal.latest_trading_day(day)
+    probe = latest
     for _ in range(7):
-        caps = fetch_market_cap(trading_day)
+        try:
+            caps = fetch_market_cap(probe)
+        except SourceError as exc:
+            log.warning("pykrx market cap failed for %s: %s", probe, exc)
+            break
         if not caps.is_empty():
-            build = rebuild_universe(cfg, state, trading_day, caps, toss=toss)
+            build = rebuild_universe(cfg, state, probe, caps, toss=toss)
             return build.symbols
-        trading_day = cal.previous_trading_day(trading_day)
-    raise SourceError("market cap snapshot unavailable for the last 7 trading days")
+        probe = cal.previous_trading_day(probe)
+    try:
+        _, caps = fetch_krx_listing(latest)
+    except SourceError as exc:
+        raise SourceError(f"universe bootstrap failed on all sources: {exc}") from exc
+    if caps.is_empty():
+        raise SourceError("universe bootstrap failed: FDR listing snapshot empty")
+    build = rebuild_universe(cfg, state, latest, caps, toss=toss)
+    return build.symbols
 
 
 def _is_auth_error(error: TossError) -> bool:

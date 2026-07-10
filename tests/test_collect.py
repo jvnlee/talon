@@ -5,6 +5,7 @@ import pytest
 
 from conftest import make_candle, utc
 from talon.data.store import INDICATOR_MINUTE, MINUTE_CANDLES
+from talon.errors import SourceError
 from talon.ingest.collect import run_collect
 from talon.sources.toss import TossError
 
@@ -124,15 +125,39 @@ def test_collect_auth_error_aborts(cfg, cal, seeded_state, series, alerter, noti
     assert seeded_state.recent_runs("collect")[0].ok is False
 
 
-def test_collect_bootstraps_universe(cfg, cal, state, series, alerter, monkeypatch):
-    caps = pl.DataFrame(
+def _bootstrap_caps():
+    return pl.DataFrame(
         {
             "symbol": ["005930", "000660"],
             "value": [5e12, 3e12],
             "volume": [1e6, 1e6],
         }
     )
-    monkeypatch.setattr("talon.ingest.collect.fetch_market_cap", lambda day: caps)
+
+
+def test_collect_bootstraps_universe(cfg, cal, state, series, alerter, monkeypatch):
+    monkeypatch.setattr("talon.ingest.collect.fetch_market_cap", lambda day: _bootstrap_caps())
+    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    client = FakeToss(default_data())
+    summary = run_collect(
+        cfg, cal=cal, state=state, store=series, client=client, alerter=alerter, now=NOW
+    )
+    assert summary.status == "ok"
+    snapshot = state.latest_universe()
+    assert snapshot is not None
+    assert snapshot.symbols == ["005930", "000660"]
+    assert snapshot.day == date(2026, 7, 10)
+
+
+def test_collect_bootstrap_falls_back_to_listing(cfg, cal, state, series, alerter, monkeypatch):
+    def krx_down(day):
+        raise SourceError("krx blocked")
+
+    monkeypatch.setattr("talon.ingest.collect.fetch_market_cap", krx_down)
+    monkeypatch.setattr(
+        "talon.ingest.collect.fetch_krx_listing",
+        lambda day: (pl.DataFrame(), _bootstrap_caps()),
+    )
     monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
     client = FakeToss(default_data())
     summary = run_collect(
