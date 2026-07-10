@@ -214,3 +214,15 @@ curl -s -G 'https://api.finance.naver.com/siseJson.naver' \
   --data-urlencode 'timeframe=day' -H 'User-Agent: Mozilla/5.0'
 # → HTTP 200/47ms. 상폐 검증: symbol=117930(한진해운), 950160(코오롱티슈진)
 ```
+
+---
+
+## 부록 B · 실행 결과 (2026-07-11)
+
+권고 전략을 같은 날 구현·실행했다.
+
+- **구현:** `sources/marcap_daily.py`(연도 parquet 캐시 + 날짜 슬라이스, 행수 하한·시총 항등식 가드, 현재 연도 자동 재다운로드), `ingest/history.py` marcap 재배선(fetch 주입, 멱등 이어받기 유지), `sources/delisting.py`(레지스트리 + terminal/corporate_action/unknown 분류), `data/adjust.py`(계단형 수정계수 + 적용 함수), doctor `--live` marcap 점검, CLI `delisting refresh`.
+- **백필:** 2016-07-01 ~ 2026-07-09, 세션 2,459 중 **2,458 적재** (155MB + 시총 153MB). 유일한 실패 2026-06-03은 제9회 전국동시지방선거 휴장일 — marcap에 6/2·6/4는 있고 6/3만 없어 실제 휴장 확인. exchange-calendars 4.13.2(최신)가 이 임시공휴일을 모르는 캘린더 한계이며 데이터 공백이 아님.
+- **검증:** 삼성전자 50:1 분할 경계(2018-04-27→05-04) 원주가·주식수 정확 / 한진해운 2016-07 존재, 마지막 거래일 2017-03-06 == ArrantEndDate, 상폐 후 부재 / 시총 항등식 표본 50일 128,247행 불일치 0 / 최신일(2026-07-09) 상위 거래대금 5종목 네이버 대조 close·volume 전부 0.1% 이내 / 일별 행수 2,121~2,774(중앙값 2,443).
+- **상폐 레지스트리:** 4,159건 적재. 2016+ 주권 556건 = terminal 346 · corporate_action 165 · unknown 45(대부분 종류주식·SPAC 해산 — 보통주 유니버스 필터가 배제).
+- **알려진 한계:** (1) 임시공휴일(선거 등)은 캘린더가 세션으로 오인 → 해당일 eod가 허위 data-not-ready 경보 1건 가능(토스 대조 가드가 오염 적재는 차단). (2) 수정계수 전 종목 일괄 산출은 관문 1(백테스트) 직전에 실행 예정 — 프리미티브(`stepwise_factors`)와 검증은 완료.
