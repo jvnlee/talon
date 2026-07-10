@@ -12,6 +12,7 @@ MARKET_CAP = "marketcap"
 INDICATOR_MINUTE = "indicators_1m"
 INDICATOR_DAILY = "indicators_1d"
 INVESTOR_TRADING = "investor_trading"
+DELISTING = "delisting"
 
 CANDLE_SCHEMA: dict[str, pl.DataType] = {
     "ts": pl.Datetime("us", "UTC"),
@@ -96,6 +97,10 @@ class ParquetStore:
         merged = merged.unique(subset=[key], keep="last").sort(key)
         _atomic_write(merged, path)
         return merged.height - (existing.height if existing is not None else 0)
+
+    def replace(self, dataset: str, name: str, frame: pl.DataFrame) -> int:
+        _atomic_write(frame, self.path(dataset, name))
+        return frame.height
 
     def read(self, dataset: str, name: str) -> pl.DataFrame | None:
         path = self.path(dataset, name)

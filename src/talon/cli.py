@@ -13,6 +13,7 @@ from talon.config import TalonSettings, load_settings
 from talon.data.state import StateDB
 from talon.data.store import (
     DAILY_CANDLES,
+    DELISTING,
     INDICATOR_MINUTE,
     MINUTE_CANDLES,
     DatePartitionedStore,
@@ -245,6 +246,23 @@ def status() -> None:
             click.echo(f"유니버스: {snapshot.day} 기준 {len(snapshot.symbols)}종목")
         else:
             click.echo("유니버스: 없음")
+
+
+@main.group()
+def delisting() -> None:
+    pass
+
+
+@delisting.command("refresh")
+def delisting_refresh() -> None:
+    from talon.sources.delisting import fetch_delisting_registry
+
+    cfg = load_settings()
+    registry = fetch_delisting_registry(_today_kst())
+    ParquetStore(cfg.parquet_dir).replace(DELISTING, "registry", registry)
+    counts = dict(registry.group_by("classification").len().iter_rows())
+    breakdown = ", ".join(f"{key} {value}" for key, value in sorted(counts.items()))
+    click.echo(f"상폐 레지스트리 {registry.height}건 적재 ({breakdown})")
 
 
 @main.group()
