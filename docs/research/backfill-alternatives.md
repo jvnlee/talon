@@ -1,0 +1,216 @@
+# talon 10년 일봉 백필 대체 소스 전략
+
+작성일: 2026-07-11 · 상태: 최종 종합(실측·적대검증 통합) · 저장 위치: `docs/research/backfill-alternatives.md`
+
+> 표기 규칙 — **[사실]** 이 맥북에서 실측하거나 공식 1차 소스로 직접 확인한 것. **[추정]** 정황·2차 인용에 근거한 추론. 실측과 웹 주장이 충돌하면 실측을 따른다.
+
+---
+
+## 1. 배경 — KRX 차단
+
+talon은 한국 주식(KOSPI/KOSDAQ) 단타·스윙용 개인 퀀트 시스템으로, 백테스트를 위해 최근 10년치 전종목 일봉(OHLCV·거래대금·시가총액·상장주식수, 가능하면 상장주식수·수급)이 필요하다. 데이터 정합성과 룩어헤드 안전성이 최우선이며 상폐 종목 포함(생존편향 방지)이 중요하다.
+
+**[사실]** 2025-12-27부로 KRX 정보데이터시스템이 회원제 'KRX Data Marketplace'로 전면 개편되며 로그인·인증키를 필수화했다. 그 결과 비인증 스크래핑 경로(`data.krx.co.kr/getJsonData.cmd`)가 사실상 폐지되어 pykrx의 전종목 조회가 400 'LOGOUT'으로 실패한다. 프로젝트 메모의 '2026-07-11 차단'은 팀 인지 시점이며, 근본 원인의 실제 전환일은 2025-12-27이다. 이는 일시적 IP 차단 사이클이 아니라 구조적·영구적 정책 변경이므로 원복 전망은 낮다.
+
+**[사실 · 실측]** `uv run talon doctor --live` 및 pykrx 직접 호출로 재현: 전종목 스냅샷 `get_market_ohlcv(day, market="ALL")`·`get_market_cap`는 직전 거래일(2026-07-10)에 대해 4/4 실패(`KeyError: None of ['시가','고가','저가','종가'] are in the columns`). 반면 **개별종목 조회는 정상**(삼성전자 10년 2453행 반환). talon의 backfill·eod·collect는 전적으로 차단된 ALL 스냅샷 경로에만 의존하므로 현행 코드 기준 pykrx는 백필 소스로 작동 불가.
+
+---
+
+## 2. 조사 범위
+
+- **포함:** 공식/합법 경로, 공개 데이터셋, 이용약관상 개인 비상업 백테스트에 문제없는 소스.
+- **제외(지침):** KRX 봇 탐지 회피 기법. stooq(JS 작업증명)·investing.com(Cloudflare)·다음금융(403 토큰) 등 우회가 필요한 소스는 실사용 후보에서 제외.
+- **순위 기준:** 무료·저비용 > 데이터 완전성(10년·시총·거래대금) > 상폐 커버리지 > 유지보수 리스크(차단·API 변경) > 파이썬 통합 난이도.
+
+---
+
+## 3. 후보별 상세 (실측 결과 포함)
+
+### 3.1 FinanceData/marcap — 백필 본체 (1순위) ⭐
+
+**[사실 · 실측 PASS]** GitHub 공개 리포의 연도별 parquet(`raw.githubusercontent.com/FinanceData/marcap/master/data/marcap-YYYY.parquet`, 1995~2026). 계정·키 불필요. 오늘 재확인: 2026 파일 HTTP 200·13.7MB, 최신 커밋 `auto-update dataset` 2026-07-10.
+
+4대 기준 전부 통과:
+- **(a) 필드 완비:** 18컬럼 `[Code,Name,Close,Dept,ChangeCode,Changes,ChangesRatio,Volume,Amount,Open,High,Low,Marcap,Stocks,Market,MarketId,Rank,Date]`. 요구 필드 Open/High/Low/Close/Volume + **Amount(거래대금) + Marcap(시가총액) + Stocks(상장주식수)** 전부 존재. 날짜별 스냅샷 1파일로 talon의 `DAILY_SNAPSHOT_SCHEMA`와 `MARKET_CAP_SCHEMA`를 동시 충족.
+- **(b) 상폐 보존(생존편향 없음):** 한진해운(117930)이 marcap-2016에 246거래일 보존, 2026 파일엔 부재. 상장 당시 날짜에 그대로 남음.
+- **(c) 최신성:** marcap-2026 max Date 2026-07-09(오늘 T-2, 직전 거래일까지). 하루당 종목수 중앙값 2,880.
+- **(d) 원주가 확정:** 삼성전자 2018-05-04 50:1 액면분할 경계에서 Close 265만→5.19만(51배 급락), Stocks 정확히 50.0배 급증 → **원주가(비수정) 저장 확정.**
+
+**[사실 · 크로스체크 실측]** marcap × 네이버 siseJson 정합성: (a) 삼성 분할계수 50→1과 경계일 2018-05-04가 두 소스 정확 일치, (b) **Marcap = Close × Stocks가 2018 전체 파일(567,521행) 100% 정확** → 과거 시총 완전 재현, (c) Amount는 밴드 내이며 2018-05-31 저가 이탈(내재 VWAP < 정규장 저가)이 오히려 실제 KRX 체결 거래대금(합성 아님) 근거.
+
+**[사실 · 소멸코드 조인 실측]** 2016 소멸코드 356건이 FDR KRX-DELISTING로 100% 설명(unexplained 0). 순수상폐 149/149에서 marcap 마지막 거래일 == 정리매매 종료일(ArrantEndDate) 정확 일치.
+
+**리스크:** 원주가라 수정주가 재구성 필수 / 명시적 LICENSE 없음(개인 비상업 저위험) / 향후 일일 갱신은 유지보수자 CI(KRX 의존, 과거분은 불변) / 수급·펀더멘털 없음.
+
+출처: https://github.com/FinanceData/marcap · https://financedata.github.io/marcap/
+
+### 3.2 네이버 금융 siseJson — 수정주가 짝 (2순위)
+
+**[사실 · 실측 PASS]** `api.finance.naver.com/siseJson.naver`, 무인증·무키. 오늘 재확인 HTTP 200/47ms.
+- 깊이: 삼성 5310행(2005~현재), 인위적 캡 없음.
+- **수정주가:** 2018 분할 경계 연속(분할 전 원주가 ~265만이 5.19만으로 1/50 조정) → 백테스트 적합.
+- 상폐 보존: 한진해운 1778행(→20170306), 웅진에너지 2445행(→20200529). 존속 티커(쌍용차→KG모빌리티)는 현재까지.
+- 필드: `[날짜,시가,고가,저가,종가,거래량,외국인소진율]` — **거래대금·시총·상장주식수 없음**(marcap로 보완).
+- 거래정지 아티팩트: O=H=L=0·Volume=0·종가 캐리(상폐 종목·삼성 분할 재편기 모두) → 전처리 필수.
+
+marcap이 원주가라 발생하는 수정주가 공백을 이 소스가 메운다. talon이 이미 FDR DataReader 백엔드(`fetch_symbol_history`)로 이 경로를 사용 중.
+
+**리스크:** 시총/거래대금/상장주식수 부재 / 비공식 API(스펙 변경·약관 회색지대) / fchart 계열 ~3000봉 캡 / 오래전 비인기 상폐 미보관 가능.
+
+출처: `api.finance.naver.com/siseJson.naver?symbol=005930&requestType=1&startTime=20160101&endTime=20260711&timeframe=day`
+
+### 3.3 FDR KRX-DELISTING (fdr_krx_data_cache) — 상폐 메타데이터 (3순위)
+
+**[사실 · 실측 PASS]** `fdr.StockListing('KRX-DELISTING')` 또는 raw CSV(`.../fdr_krx_data_cache/.../data/listing/delisting/YYYY-MM-DD.csv`). raw 경로는 **KRX 무호출**이라 차단과 무관. 오늘 최신 2026-07-11.csv HTTP 200.
+- 4159행, 1960-11-21~2026-07-09, 15컬럼: `Symbol,Name,Market,SecuGroup,Kind,ListingDate,DelistingDate,Reason,ArrantEnforceDate,ArrantEndDate,Industry,ParValue,ListingShares,ToSymbol,ToName`.
+- 채움 정도: ArrantEnforce/EndDate(정리매매 개시/종료) 각 ~1,222/1,229, ToSymbol 997, Reason 2758.
+- **[사실]** marcap 소멸 356건 100% 설명, 순수상폐 149/149 마지막 거래일 == ArrantEndDate.
+
+**핵심 경고 [사실]:** 소멸 = 상폐가 아니다. 비-부실 기업행위 133건(피흡수합병 44·지주사 완전자회사화 32·자진상폐 32·우선주 소멸 24 등) 중 ToSymbol로 잡히는 건 18건뿐. 우리은행(000030)·메리츠화재(000060)·DL건설(001880)은 ToSymbol 비어있는 완전자회사화라 ToSymbol-only 규칙이면 -100% 오처리됨. → **반드시 Reason 버킷 + ArrantEndDate 유무로 규칙 수립.**
+
+같은 EOD 스냅샷(`data/listing/krx`)은 2026-03-08~ 약 4개월치뿐이라 10년 가격 백필엔 부적합(EOD 일일 폴백 전용).
+
+출처: https://github.com/FinanceData/fdr_krx_data_cache · https://github.com/FinanceData/FinanceDataReader/issues/24
+
+### 3.4 KRX Open API (openapi.krx.co.kr) — 공식 원천 폴백 (4순위)
+
+KRX가 스크래핑 차단의 공식 대체로 신설한 정당 경로. 게이트웨이 `data-dbg.krx.co.kr`, 경로 `/svc/apis/sto/stk_bydd_trd`(KOSPI)·`ksq_bydd_trd`(KOSDAQ). 헤더 AUTH_KEY, 파라미터 basDd.
+
+- **[사실 · 공식]** 2010-01-04부터 제공(서비스 상세 스펙 명시). 10년 충족.
+- **[추정 · 실사용 리포트]** basDd 단일 콜로 전종목 OHLC + ACC_TRDVOL(거래량) + ACC_TRDVAL(거래대금) + MKTCAP(시총) + LIST_SHRS(상장주식수) 반환.
+- **[사실 · 적대검증 CONFIRMED]** 10년 KOSPI+KOSDAQ 백필 ≈5,000콜(거래일 2,500×2시장) ≤ 일 10,000콜 쿼터 → 하루 내 완주. (10,000 수치는 커뮤니티 다중 교차확인, 공식 원문 확정은 아님.)
+- **[추정 · 적대검증 CONFIRMED로 강하게 지지]** basDd 스냅샷 구조 + pykrx #89('KRX는 상폐 종가 지원') + MDCSTAT239(상폐시세추이 존재) → 과거 basDd에 상폐 종목 포함. **단 직접 캡처는 없음(키 발급 후 실측 필요).**
+
+**[사실 · 적대검증 REFUTED — 약관 주의]** '상업적 재배포만 제한'이라는 통념은 원문과 배치된다. 공식 약관(OPPINFO002.jsp) 제6조② 비상업 목적만 허용, **제11조② 모든 제3자 제공 금지, 제11조③ 계약 종료 후 데이터 이용 금지**, 제5조 인증키 1년 갱신. 개인 백테스트 로컬 적재는 계약 유효 중 명시적 금지는 아니나(부작위) 재배포·종료 후 이용·영구 보관은 약관 위배 소지.
+
+**리스크:** 미실측(키 필요) / 계정+서비스별 승인 대기(약 1~2일, 승인 전 401) / 2025-12 신설이라 약관·한도 변경 여지. raccoonyy/pykrx-openapi 래퍼 존재.
+
+출처: https://openapi.krx.co.kr/contents/OPP/USES/service/OPPUSES002_S2.cmd · https://github.com/raccoonyy/pykrx-openapi · https://github.com/sharebook-kr/pykrx/issues/89
+
+### 3.5 증권사 REST — KIS / 키움 / LS (5순위, 보조)
+
+macOS 순수 REST·무료(계좌만)·10년 일봉 백필 가능한 공식 합법 경로.
+- **[사실 · 적대검증 CONFIRMED]** KIS `inquire-daily-itemchartprice`(TR FHKST03010100) output2 각 일자에 `acml_tr_pbmn`(일자별 거래대금) 포함 — 공식 저장소 코드로 확증. `inquire-daily-price`(FHKST01010400)는 ~30일만 반환하므로 백필엔 itemchartprice를 써야 함.
+- KIS는 100건/호출 날짜창 반복(20req/s), 키움 ka10081·LS t8410은 next-key/cts 연속조회(~1req/s).
+
+**구조적 한계 [사실 · 모든 브로커 공통]:** (1) **상폐 종목 미포함**(종목마스터 기준) → 브로커 단독은 생존편향. (2) **시총·상장주식수의 일자별 시계열 미제공**(현재 스냅샷만) → 과거 시총 정확 복원 불가. 이것이 KRX/marcap 없이 안 되는 진짜 이유. marcap이 이미 이 둘을 커버하므로 브로커는 백필 주력이 아닌 **거래대금 교차검증·향후 실시간 시세** 포지션.
+
+출처: https://github.com/koreainvestment/open-trading-api · https://apiportal.koreainvestment.com/intro
+
+### 3.6 KRX KIND 상장폐지현황 — 독립 교차검증 (6순위, 선택)
+
+**[사실 · 실측 works]** `kind.krx.co.kr/investwarn/delcompany.do` POST. data.krx.co.kr 차단과 별개 시스템이라 정상 200(EUC-KR HTML), 6컬럼 고정, ~1991까지. FDR과 진성 보통주 상폐 5/5·104/106 정합, FDR 누락 진성 상폐 2건(우양에이치씨·오상헬스케어) 보완. FDR이 워런트/수익증권/1956년까지 소급하는 상위집합이라 KIND는 독립 백업·보완 검출원.
+
+### 3.7 조사했으나 후보에서 밀린 소스
+
+| 소스 | 판정 | 사유 |
+|---|---|---|
+| 금융위 getStockPriceInfo (data.go.kr 15094808) | 조건부 폴백 | **[적대검증 uncertain]** 필드는 완비(거래대금·시총·상장주식수 포함)이나 최초 basDt < 2016 미확정(형제 지수 API는 2020~). 무료 키 자동승인이라 KRX Open API 대체 폴백으로 값어치. |
+| 금융위 주식발행정보 (15043423) | 보조 | 상장폐지일자 메타데이터 — FDR 교차검증용. |
+| pykrx 로그인(KRX_ID/PW, v1.2.8+) | 전환기 불안정 | 무료 KRX 계정 로그인으로 전종목 복구 가능성이나 2026-05 신규·서버측 버그 지속. 수급/펀더멘털 필요 시 재검토. |
+| 대신 CREON | macOS 불가 | 브로커 중 유일하게 상폐 접근 우수하나 Windows COM 전용. |
+| Yahoo/yfinance | 크로스체크만 | 상폐 커버리지 비일관(404/200 혼재), 429 레이트리밋, range=max 다운샘플 함정. |
+| EODHD / Twelve Data / Tiingo / Alpha Vantage | 부적합/후순위 | 유료거나 한국 커버리지·상폐·거래대금 불확실. 무료 스택으로 충분. |
+| FnGuide QuantiWise / DeepSearch / Koscom | 부적합 | 개인 접근성·가격 불투명, 자체 DB 구축 시 약관 충돌 소지(FnGuide). |
+| stooq / investing.com / 다음 | 제외 | JS 작업증명·Cloudflare·403 — 우회는 지침상 제외. |
+| ECOS(한국은행) | 목적 부적합 | 개별 종목 시세 없음. 향후 매크로 팩터용만. |
+
+---
+
+## 4. 비교표 (핵심 후보)
+
+| 소스 | 비용 | 10년 | 거래대금 | 시총·상장주식수 | 수정주가 | 상폐 | KRX차단 무관 | 실측 | 통합난이도 |
+|---|---|---|---|---|---|---|---|---|---|
+| **marcap** | 무료 | ✅1995~ | ✅ | ✅ | ❌원주가 | ✅보존 | ✅오프라인 | ✅PASS | 낮음 |
+| **네이버 siseJson** | 무료 | ✅2005~ | ❌ | ❌ | ✅수정 | ✅폐지일까지 | ✅네이버 | ✅PASS | 낮음 |
+| **FDR KRX-DELISTING** | 무료 | ✅1960~ | — | 메타만 | — | ✅목록완전 | ✅raw CSV | ✅PASS | 낮음 |
+| **KRX Open API** | 무료 | ✅2010~ | ✅ | ✅ | ❌원주가 | 🟡추정 | ✅공식 | ❌키필요 | 중간 |
+| **증권사 REST** | 무료* | ✅ | ✅(KIS확증) | ❌시계열X | 옵션 | ❌미포함 | ✅ | ❌계정필요 | 중~높 |
+| **KIND** | 무료 | ✅~1991 | — | 메타만 | — | ✅목록 | ✅별시스템 | ✅works | 낮음 |
+| pykrx ALL 스냅샷 | 무료 | — | — | — | — | — | ❌차단 | ❌FAIL | (기존) |
+
+\* 계좌 개설 필요. 🟡 = 강한 정황이나 직접 캡처 미확인.
+
+---
+
+## 5. 권고 전략 — 조합
+
+단일 소스가 아니라 역할 분담이 최적이다.
+
+```
+┌ 백필 본체 (2016~2026, 전종목·전필드·상폐 포함) ─────────────────
+│   marcap 연도별 parquet → DAILY_SNAPSHOT + MARKET_CAP 동시 충족
+│   Amount→value, Marcap→cap, Stocks→shares (거의 1:1 매핑)
+├ 수정주가 재구성 ────────────────────────────────────────────
+│   marcap 원주가 × 네이버 siseJson 수정주가 → 종목별 조정계수(이산 계단)
+├ 상폐 유니버스·종결 처리 ────────────────────────────────────
+│   FDR KRX-DELISTING(raw CSV) — Reason 버킷 + ArrantEndDate 규칙
+│   (KIND는 독립 교차검증)
+├ 일일 EOD (최근, T 당일) ────────────────────────────────────
+│   기존 fdr_krx_data_cache 스냅샷 폴백 유지(marcap은 T-2라 당일 부적합)
+│   + 토스 캔들(현재 유지)
+├ 정합성 크로스체크 ──────────────────────────────────────────
+│   crosscheck.py: marcap(원주가+factor) vs 네이버(수정주가) close/volume
+└ 합법 원천 폴백 (등록 권장) ─────────────────────────────────
+    KRX Open API — marcap CI 중단 대비 정당 원천, 상폐 포함 실측 검증
+```
+
+### 기존 가동 소스와의 정합성
+- **FDR 스냅샷 폴백:** 그대로 EOD 일일 폴백으로 유지. `data/listing/krx` 스냅샷(2026-03~)은 최근분만이라 백필용이 아니라 당일 EOD 보강용.
+- **토스 캔들:** 분봉 누적·당일 시세는 유지. 토스는 현재 상장 종목만이라 상폐·10년 백필 부적합 — 그 역할을 marcap이 담당.
+- **크로스체크 방법:** talon의 `crosscheck.py`가 이미 close/volume 상대차 비교를 구현. marcap 백필 값 vs 네이버 종목별을 factor 반영해 대조하고, 시총은 `Marcap == Close × Stocks` 항등식(2018 전체 파일 100% 검증)으로 자체 검산.
+
+### talon 코드 매핑 (통합 난이도 근거)
+- 현재 `ingest/history.py:backfill_daily`는 차단된 `sources/krx_daily.fetch_daily_ohlcv/fetch_market_cap`(pykrx ALL)에만 의존. `sources/marcap_daily.py` 신규 어댑터로 교체하면 날짜 루프·멱등 `write_date`·`BackfillSummary` 구조는 그대로 재사용 → 낮은 난이도.
+- marcap 컬럼이 `DAILY_SNAPSHOT_SCHEMA`(day/symbol/open/high/low/close/volume/value/change_pct)·`MARKET_CAP_SCHEMA`(day/symbol/close/cap/volume/value/shares)에 거의 1:1 대응.
+
+---
+
+## 6. 상폐 / 생존편향 — 정직한 평가
+
+**[사실]** 무료 스택(marcap + FDR KRX-DELISTING)으로 10년(2016~) 백테스트 유니버스의 생존편향은 실질 해소된다:
+1. 상폐 종목 가격: marcap이 거래기간 OHLCV+거래대금+시총+상장주식수 보존(실측).
+2. 상폐 목록: 소멸 356건 100% 설명, KIND 독립 백업.
+3. 상폐 종결: 순수상폐 149/149에서 marcap 마지막 거래일 == ArrantEndDate → 정리매매 최종 종가(페니 수준)로 상폐수익률 결정론적 종결.
+
+**반드시 지킬 규칙 [사실]:**
+- (a) **수정주가 재구성 필수** — 미조정 시 분할 경계 가짜 -98% 폭락이 백테스트 오염(룩어헤드 직결).
+- (b) **승계 ≠ 상폐** — 비-부실 기업행위 133건 중 ToSymbol로 잡히는 건 18건뿐. `ArrantEndDate 존재 & Reason∈부실(감사거절/자본잠식/부도/해산/미제출)`→마지막 종가로 종결(≈-100%), `ArrantEndDate 부재 & Reason∈합병/전환/자진/우선주`→승계·현금청산(-100% 금지).
+
+**정직한 한계 [추정]:** 오래전·비인기 상폐의 수정계수는 네이버 미보관으로 얇아질 수 있음 / marcap이 KRX 원천 누락을 승계하면 교차검증으로만 탐지 / 상폐 이후 장외 청산가·합병비율 실현가는 OpenDART 없이는 근사만.
+
+**부분완화 시작 옵션:** 부담되면 2016 이후만 상폐 포함 + 저유동성/저가주 배제로 시작(편향 완화이지 제거는 아님).
+
+---
+
+## 7. 남은 리스크 · 미검증
+
+1. **[미검증]** KRX Open API 상폐 포함은 추론(직접 캡처 없음), 10,000콜 쿼터는 커뮤니티 확인. 키 발급 후 과거 상폐일 basDd 실측 필요(최우선).
+2. **[미검증]** getStockPriceInfo 최초 basDt < 2016 여부 미확정(지수 API는 2020~).
+3. **[미검증]** 키움 ka10081·LS t8410 이력 상한·일봉 필드(KIS acml_tr_pbmn만 확증).
+4. **[불확실]** marcap 수정주가 재구성 — Stocks 변화율만으로 현금배당·일부 권리락 미포착, 네이버 조인 필요하나 ~3000봉 캡·구시대 상폐 미보관.
+5. **[불확실]** marcap Amount/Marcap 엣지케이스 전수 미검증(2018 전체는 100% 통과, 적재 후 표본 대조 권장).
+6. **[공백]** 수급·공매도·펀더멘털은 스택 전부 미제공 → pykrx 로그인/OpenDART/토스 별도.
+7. **[리스크]** marcap·fdr_krx_data_cache 일일 갱신 CI의 KRX 차단 내성 불확실(과거분 불변). 단일 유지보수자 의존.
+8. **[약관]** KRX Open API 로컬 적재 합법성은 추론 수준(재배포·종료 후 이용 명시 금지). 네이버·야후 자동수집은 회색지대 — 개인 비상업·비재배포·저빈도로 완화.
+
+---
+
+## 부록 · 실측 재현 명령
+
+```bash
+# marcap 리치빌리티 + 최신성
+curl -sI 'https://raw.githubusercontent.com/FinanceData/marcap/master/data/marcap-2026.parquet'
+# → HTTP 200, content-length 13,748,676. 최신 커밋 2026-07-10 auto-update.
+
+# FDR 상폐 레지스트리
+curl -sI 'https://raw.githubusercontent.com/FinanceData/fdr_krx_data_cache/refs/heads/master/data/listing/delisting/2026-07-11.csv'
+# → HTTP 200, 641,983 bytes, 4159행.
+
+# 네이버 siseJson (무인증)
+curl -s -G 'https://api.finance.naver.com/siseJson.naver' \
+  --data-urlencode 'symbol=005930' --data-urlencode 'requestType=1' \
+  --data-urlencode 'startTime=20160101' --data-urlencode 'endTime=20260711' \
+  --data-urlencode 'timeframe=day' -H 'User-Agent: Mozilla/5.0'
+# → HTTP 200/47ms. 상폐 검증: symbol=117930(한진해운), 950160(코오롱티슈진)
+```
