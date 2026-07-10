@@ -81,7 +81,7 @@ def rebuild_universe(
     if toss is not None:
         candidates = candidate_symbols(liquidity, cfg.universe_size * 2)
         try:
-            stock_info = {info.symbol: info for info in toss.stocks(candidates)}
+            stock_info = {info.symbol: info for info in toss.stocks(candidates)} or None
         except SourceError as exc:
             log.warning("toss stock info unavailable, falling back to heuristic: %s", exc)
     build = build_universe(

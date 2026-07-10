@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import click
 
-from talon import __version__, launchd as launchd_mod
+from talon import __version__
+from talon import launchd as launchd_mod
 from talon.config import TalonSettings, load_settings
 from talon.data.state import StateDB
 from talon.data.store import (

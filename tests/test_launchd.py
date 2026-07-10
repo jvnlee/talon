@@ -1,0 +1,42 @@
+import plistlib
+from pathlib import Path
+
+from talon.launchd import JOBS, install, plist_path, render_plist, uninstall
+
+TALON_BIN = Path("/opt/talon/.venv/bin/talon")
+DATA_DIR = Path("/Users/tester/.talon")
+
+
+def test_collect_plist():
+    spec = plistlib.loads(render_plist("collect", TALON_BIN, DATA_DIR))
+    assert spec["Label"] == "com.talon.collect"
+    assert spec["ProgramArguments"] == [str(TALON_BIN), "collect"]
+    assert spec["StartInterval"] == 300
+    assert spec["RunAtLoad"] is True
+    assert spec["EnvironmentVariables"] == {"TALON_DATA_DIR": str(DATA_DIR)}
+    assert spec["StandardErrorPath"].endswith("logs/collect.log")
+
+
+def test_watchdog_plist():
+    spec = plistlib.loads(render_plist("watchdog", TALON_BIN, DATA_DIR))
+    assert spec["StartInterval"] == 600
+    assert "RunAtLoad" not in spec
+
+
+def test_eod_plist_schedule():
+    spec = plistlib.loads(render_plist("eod", TALON_BIN, DATA_DIR))
+    entries = spec["StartCalendarInterval"]
+    assert len(entries) == 10
+    assert {entry["Weekday"] for entry in entries} == {1, 2, 3, 4, 5}
+    assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(16, 40), (18, 30)}
+
+
+def test_install_and_uninstall_writes_plists(tmp_path):
+    written = install(TALON_BIN, DATA_DIR, directory=tmp_path, run_launchctl=False)
+    assert [p.name for p in written] == [f"com.talon.{job}.plist" for job in JOBS]
+    for job in JOBS:
+        assert plist_path(job, tmp_path).exists()
+
+    removed = uninstall(directory=tmp_path, run_launchctl=False)
+    assert len(removed) == len(JOBS)
+    assert not any(plist_path(job, tmp_path).exists() for job in JOBS)
