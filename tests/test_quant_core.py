@@ -193,6 +193,9 @@ def test_rule_exit_sells_position():
     assert trade["reason"] == "strategy"
     assert trade["exit_day"] == d(2)
     assert core.owner_of("AAA") is None
+    assert core.closed_trades[0][0] == "teststrat"
+    assert core.trades_by("teststrat") == 1
+    assert core.trades_by("other") == 0
 
 
 def test_duplicate_strategy_names_rejected():

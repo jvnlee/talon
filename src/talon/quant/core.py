@@ -44,6 +44,7 @@ class QuantCore:
         self._specs = {spec.name: spec for spec in self.strategies}
         self._owner: dict[str, str] = {}
         self._pending: set[str] = set()
+        self.closed_trades: list[tuple[str | None, ClosedTrade]] = []
 
     @property
     def interventions(self) -> list[Intervention]:
@@ -54,7 +55,11 @@ class QuantCore:
 
     def on_close(self, trade: ClosedTrade) -> None:
         strategy = self._owner.pop(trade.symbol, None)
+        self.closed_trades.append((strategy, trade))
         self.gate.record_close(trade, strategy)
+
+    def trades_by(self, strategy: str) -> int:
+        return sum(1 for owner, _ in self.closed_trades if owner == strategy)
 
     def decide(self, view: MarketView, portfolio: PortfolioView) -> list[Order]:
         frame = self._frames.get(view.day)
