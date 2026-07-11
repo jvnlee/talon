@@ -13,6 +13,7 @@ import polars as pl
 
 from talon import __version__
 from talon import launchd as launchd_mod
+from talon.backtest.crosscheck import run_crosscheck
 from talon.backtest.data import PANEL_COLUMNS, load_panel
 from talon.backtest.engine import EngineConfig, run_backtest
 from talon.backtest.lookahead import pick_cuts, verify_factors, verify_replay
@@ -26,6 +27,7 @@ from talon.data.store import (
     DatePartitionedStore,
     ParquetStore,
 )
+from talon.errors import TalonError
 from talon.factors.engine import warmup_periods
 from talon.ingest.collect import bootstrap_universe, run_collect
 from talon.ingest.eod import run_eod
@@ -293,6 +295,32 @@ def lookahead(
         ]
     click.echo(json.dumps(payload, ensure_ascii=False))
     if factor_violations or replay_violations:
+        sys.exit(1)
+
+
+@main.command("crosscheck-engine")
+@click.option("--scenarios", type=int, default=10, show_default=True)
+@click.option("--seed", type=int, default=42, show_default=True)
+@click.option("--symbols", type=int, default=3, show_default=True)
+@click.option("--days", type=int, default=120, show_default=True)
+def crosscheck_engine(scenarios: int, seed: int, symbols: int, days: int) -> None:
+    try:
+        report = run_crosscheck(seed=seed, scenarios=scenarios, symbols=symbols, days=days)
+    except TalonError as exc:
+        raise click.ClickException(str(exc)) from exc
+    payload: dict[str, object] = {
+        "status": "ok" if report.ok else "mismatch",
+        "scenarios": report.scenarios,
+        "symbols": report.symbols,
+        "trades": report.trades,
+        "mismatches": len(report.mismatches),
+    }
+    if report.mismatches:
+        payload["examples"] = [
+            f"{m.kind} s{m.scenario}/{m.symbol}: {m.detail}" for m in report.mismatches[:5]
+        ]
+    click.echo(json.dumps(payload, ensure_ascii=False))
+    if not report.ok:
         sys.exit(1)
 
 
