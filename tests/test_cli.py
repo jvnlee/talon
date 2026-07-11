@@ -39,8 +39,7 @@ def test_launchd_install_print_only(tmp_path, monkeypatch):
     assert "StartCalendarInterval" in result.output
 
 
-def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
-    import json
+def _write_flat_daily(snapshots, series, count=6):
     from datetime import date, timedelta
 
     import polars as pl
@@ -48,9 +47,7 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
     from talon.data.adjust import FACTOR_SCHEMA
     from talon.data.store import ADJUST_FACTORS, DAILY_CANDLES, DAILY_SNAPSHOT_SCHEMA
 
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
-    days = [date(2026, 1, 5) + timedelta(days=i) for i in range(6)]
+    days = [date(2026, 1, 5) + timedelta(days=i) for i in range(count)]
     for day in days:
         snapshots.write_date(
             DAILY_CANDLES,
@@ -76,6 +73,14 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
         pl.DataFrame({"day": days, "factor": [1.0] * len(days)}, schema=FACTOR_SCHEMA),
     )
 
+
+def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    _write_flat_daily(snapshots, series)
+
     runner = CliRunner()
     out_dir = tmp_path / "bt"
     result = runner.invoke(main, ["backtest", "--out", str(out_dir)])
@@ -86,3 +91,21 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
     assert stats["trades"] == 0
     for name in ("equity", "trades", "rejections", "interventions"):
         assert (out_dir / f"{name}.parquet").exists()
+
+
+def test_lookahead_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    _write_flat_daily(snapshots, series)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["lookahead", "--cuts", "2"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output.splitlines()[0])
+    assert payload["status"] == "ok"
+    assert payload["factor_violations"] == 0
+    assert payload["replay_violations"] == 0
+    assert len(payload["cuts"]) == 2

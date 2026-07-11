@@ -15,6 +15,7 @@ from talon import __version__
 from talon import launchd as launchd_mod
 from talon.backtest.data import PANEL_COLUMNS, load_panel
 from talon.backtest.engine import EngineConfig, run_backtest
+from talon.backtest.lookahead import pick_cuts, verify_factors, verify_replay
 from talon.config import TalonSettings, load_settings
 from talon.data.state import StateDB
 from talon.data.store import (
@@ -238,6 +239,61 @@ def backtest(
         result.rejections.write_parquet(out_dir / "rejections.parquet")
         interventions_frame(core.interventions).write_parquet(out_dir / "interventions.parquet")
         click.echo(str(out_dir))
+
+
+@main.command()
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--symbol", "symbols", multiple=True)
+@click.option("--cuts", type=int, default=3, show_default=True)
+def lookahead(
+    start_text: str | None,
+    end_text: str | None,
+    symbols: tuple[str, ...],
+    cuts: int,
+) -> None:
+    cfg = load_settings()
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    columns: dict[str, str] = {}
+    for spec in default_strategies():
+        columns.update(spec.columns())
+    columns.update(BreadthRegimeFilter().columns())
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=start,
+            end=end,
+            symbols=list(symbols) or None,
+        )
+    cut_days = pick_cuts(panel["day"].unique().to_list(), cuts)
+    if not cut_days:
+        raise click.ClickException("컷을 고를 거래일이 부족합니다")
+    factor_violations = verify_factors(panel, columns, cut_days)
+    replay_violations = verify_replay(
+        panel,
+        lambda p: QuantCore(p, strategies=default_strategies()),
+        cut_days,
+    )
+    payload: dict[str, object] = {
+        "status": "ok" if not factor_violations and not replay_violations else "lookahead",
+        "cuts": [day.isoformat() for day in cut_days],
+        "factor_violations": len(factor_violations),
+        "replay_violations": len(replay_violations),
+    }
+    if factor_violations:
+        payload["factor_examples"] = [
+            f"{v.factor} cut={v.cut} {v.day}/{v.symbol} full={v.full_value} prefix={v.prefix_value}"
+            for v in factor_violations[:5]
+        ]
+    if replay_violations:
+        payload["replay_examples"] = [
+            f"{v.kind} cut={v.cut} day={v.day} {v.detail}" for v in replay_violations[:5]
+        ]
+    click.echo(json.dumps(payload, ensure_ascii=False))
+    if factor_violations or replay_violations:
+        sys.exit(1)
 
 
 @main.command()
