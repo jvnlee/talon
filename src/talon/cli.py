@@ -477,29 +477,31 @@ def sensitivity(
     strategy_filter: tuple[str, ...],
     out_path: Path | None,
 ) -> None:
-    from talon.quant.strategies import STRATEGY_FACTORIES
+    from talon.quant.strategies import ACTIVE_STRATEGIES, STRATEGY_FACTORIES
 
     cfg = load_settings()
     start = date.fromisoformat(start_text) if start_text else None
     end = date.fromisoformat(end_text) if end_text else None
-    factories = dict(STRATEGY_FACTORIES)
     if strategy_filter:
-        unknown = sorted(set(strategy_filter) - set(factories))
+        unknown = sorted(set(strategy_filter) - set(STRATEGY_FACTORIES))
         if unknown:
-            raise click.ClickException(f"알 수 없는 전략: {unknown} (지원: {sorted(factories)})")
-        factories = {name: factories[name] for name in factories if name in strategy_filter}
+            raise click.ClickException(
+                f"알 수 없는 전략: {unknown} (지원: {sorted(STRATEGY_FACTORIES)})"
+            )
+        selected = tuple(name for name in STRATEGY_FACTORIES if name in strategy_filter)
+    else:
+        selected = ACTIVE_STRATEGIES
+    factories = {name: STRATEGY_FACTORIES[name] for name in selected}
     params = {name: _numeric_defaults(factory) for name, factory in factories.items()}
 
     def variant(target: str, param: str, value: int | float) -> list[StrategySpec]:
         return [
             factory(**{param: value}) if name == target else factory()
-            for name, factory in STRATEGY_FACTORIES.items()
+            for name, factory in factories.items()
         ]
 
     def variant_desc(target: str, param: str, value: int | float) -> list[str]:
-        return [
-            f"{name}({param}={value:g})" if name == target else name for name in STRATEGY_FACTORIES
-        ]
+        return [f"{name}({param}={value:g})" if name == target else name for name in factories]
 
     variants: dict[tuple[str, str, float], list[StrategySpec]] = {}
     for name, strategy_params in params.items():
@@ -508,7 +510,7 @@ def sensitivity(
                 variants[(name, param, float(value))] = variant(name, param, value)
 
     regime_filter = BreadthRegimeFilter()
-    base_strategies = default_strategies()
+    base_strategies = [factory() for factory in factories.values()]
     warmup = _columns_warmup(base_strategies, regime_filter)
     for specs in variants.values():
         warmup = max(warmup, _columns_warmup(specs, regime_filter))
