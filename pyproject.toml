@@ -32,6 +32,7 @@ dev = [
     "mypy>=1.10",
     "pytest>=8",
     "ruff>=0.5",
+    "vectorbt>=1.1.0",
 ]
 
 [tool.ruff]
@@ -55,6 +56,7 @@ module = [
     "FinanceDataReader.*",
     "exchange_calendars.*",
     "pandas.*",
+    "vectorbt.*",
 ]
 ignore_missing_imports = true
 
