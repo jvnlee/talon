@@ -86,3 +86,64 @@ def test_profit_factor_none_without_losses():
     )
     assert stats.profit_factor is None
     assert stats.win_rate_pct == pytest.approx(100.0)
+
+
+def alternating_curve(count=60, initial=100.0, step=0.002):
+    values = []
+    value = initial
+    for i in range(count):
+        value *= 1 + (step if i % 2 == 0 else 0.0)
+        values.append(value)
+    return pl.Series(values)
+
+
+def test_expected_max_sharpe_two_trials_unit_variance():
+    import math
+    import statistics
+
+    from talon.backtest.metrics import EULER_MASCHERONI, expected_max_sharpe
+
+    expected = EULER_MASCHERONI * statistics.NormalDist().inv_cdf(1 - 1 / (2 * math.e))
+    assert expected_max_sharpe(2, 1.0) == pytest.approx(expected)
+
+
+def test_expected_max_sharpe_grows_with_trials_and_variance():
+    from talon.backtest.metrics import expected_max_sharpe
+
+    assert expected_max_sharpe(100, 1.0) > expected_max_sharpe(2, 1.0)
+    assert expected_max_sharpe(10, 4.0) == pytest.approx(2 * expected_max_sharpe(10, 1.0))
+
+
+def test_expected_max_sharpe_requires_two_trials():
+    from talon.backtest.metrics import expected_max_sharpe
+
+    with pytest.raises(ValueError):
+        expected_max_sharpe(1, 1.0)
+
+
+def test_deflated_sharpe_clears_low_variance_trials():
+    from talon.backtest.metrics import deflated_sharpe
+
+    result = deflated_sharpe(alternating_curve(), 100.0, [0.1, 0.2])
+    assert result is not None
+    assert result.trials == 2
+    assert result.sharpe_daily == pytest.approx(0.99, rel=0.02)
+    assert result.margin > 0
+    assert result.probability > 0.95
+
+
+def test_deflated_sharpe_fails_against_high_variance_trials():
+    from talon.backtest.metrics import deflated_sharpe
+
+    result = deflated_sharpe(alternating_curve(), 100.0, [-2.0, 2.0])
+    assert result is not None
+    assert result.margin < 0
+    assert result.probability < 0.5
+
+
+def test_deflated_sharpe_needs_history_and_trials():
+    from talon.backtest.metrics import deflated_sharpe
+
+    assert deflated_sharpe(alternating_curve(), 100.0, [0.1]) is None
+    assert deflated_sharpe(pl.Series([100.0, 100.2]), 100.0, [0.1, 0.2]) is None
+    assert deflated_sharpe(pl.Series([100.0] * 20), 100.0, [0.1, 0.2]) is None

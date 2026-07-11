@@ -1,3 +1,6 @@
+import math
+import statistics
+from collections.abc import Sequence
 from datetime import date
 from typing import cast
 
@@ -5,6 +8,8 @@ import polars as pl
 from pydantic import BaseModel
 
 TRADING_DAYS_PER_YEAR = 252
+EULER_MASCHERONI = 0.5772156649015329
+_NORMAL = statistics.NormalDist()
 
 
 class BacktestStats(BaseModel):
@@ -33,9 +38,13 @@ def _drawdown_pct(curve: pl.Series) -> float:
     return abs(cast(float, drawdown)) * 100 if drawdown is not None else 0.0
 
 
-def _sharpe(curve: pl.Series, initial_cash: float) -> float | None:
+def _daily_returns(curve: pl.Series, initial_cash: float) -> pl.Series:
     full = pl.concat([pl.Series([initial_cash]), curve])
-    returns = (full / full.shift(1) - 1.0).drop_nulls()
+    return (full / full.shift(1) - 1.0).drop_nulls()
+
+
+def _sharpe(curve: pl.Series, initial_cash: float) -> float | None:
+    returns = _daily_returns(curve, initial_cash)
     if returns.len() < 2:
         return None
     std = returns.std()
@@ -44,6 +53,56 @@ def _sharpe(curve: pl.Series, initial_cash: float) -> float | None:
     mean = returns.mean()
     assert mean is not None
     return cast(float, mean) / cast(float, std) * TRADING_DAYS_PER_YEAR**0.5
+
+
+class DeflatedSharpe(BaseModel):
+    trials: int
+    sharpe_daily: float
+    expected_max_daily: float
+    margin: float
+    probability: float
+
+
+def expected_max_sharpe(trials: int, sharpe_variance: float) -> float:
+    if trials < 2 or sharpe_variance < 0:
+        raise ValueError("시도 2회 이상과 음수가 아닌 분산이 필요합니다")
+    return math.sqrt(sharpe_variance) * (
+        (1 - EULER_MASCHERONI) * _NORMAL.inv_cdf(1 - 1 / trials)
+        + EULER_MASCHERONI * _NORMAL.inv_cdf(1 - 1 / (trials * math.e))
+    )
+
+
+def deflated_sharpe(
+    curve: pl.Series,
+    initial_cash: float,
+    trial_sharpes: Sequence[float],
+) -> DeflatedSharpe | None:
+    if len(trial_sharpes) < 2:
+        return None
+    returns = _daily_returns(curve, initial_cash)
+    observations = returns.len()
+    if observations < 3:
+        return None
+    std = returns.std()
+    if std is None or std == 0:
+        return None
+    mean = returns.mean()
+    assert mean is not None
+    sharpe = cast(float, mean) / cast(float, std)
+    skew = cast(float, returns.skew() or 0.0)
+    kurtosis = cast(float, returns.kurtosis(fisher=False) or 3.0)
+    variance_term = 1 - skew * sharpe + (kurtosis - 1) / 4 * sharpe**2
+    if variance_term <= 0:
+        return None
+    star = expected_max_sharpe(len(trial_sharpes), statistics.variance(trial_sharpes))
+    z = (sharpe - star) * math.sqrt(observations - 1) / math.sqrt(variance_term)
+    return DeflatedSharpe(
+        trials=len(trial_sharpes),
+        sharpe_daily=sharpe,
+        expected_max_daily=star,
+        margin=sharpe - star,
+        probability=_NORMAL.cdf(z),
+    )
 
 
 def summarize(
