@@ -1,14 +1,20 @@
+import json
 import logging
 import sys
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import click
+import polars as pl
 
 from talon import __version__
 from talon import launchd as launchd_mod
+from talon.backtest.data import PANEL_COLUMNS, load_panel
+from talon.backtest.engine import EngineConfig, run_backtest
 from talon.config import TalonSettings, load_settings
 from talon.data.state import StateDB
 from talon.data.store import (
@@ -19,6 +25,7 @@ from talon.data.store import (
     DatePartitionedStore,
     ParquetStore,
 )
+from talon.factors.engine import warmup_periods
 from talon.ingest.collect import bootstrap_universe, run_collect
 from talon.ingest.eod import run_eod
 from talon.ingest.history import backfill_daily
@@ -26,6 +33,10 @@ from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
 from talon.markets.kr import krx_calendar
 from talon.notify.telegram import Alerter, TelegramNotifier
+from talon.quant.core import QuantCore
+from talon.quant.regime import BreadthRegimeFilter
+from talon.quant.risk import interventions_frame
+from talon.quant.strategies import default_strategies
 from talon.sources.toss import TossClient
 from talon.timeutil import KST, now_utc
 
@@ -176,6 +187,57 @@ def backfill_daily_command(years: int | None, start_text: str | None, end_text: 
                 progress=report,
             )
     click.echo(summary.model_dump_json())
+
+
+@main.command()
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--symbol", "symbols", multiple=True)
+@click.option("--cash", type=float, default=10_000_000.0, show_default=True)
+@click.option("--out", "out_dir", type=click.Path(path_type=Path), default=None)
+def backtest(
+    start_text: str | None,
+    end_text: str | None,
+    symbols: tuple[str, ...],
+    cash: float,
+    out_dir: Path | None,
+) -> None:
+    cfg = load_settings()
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    strategies = default_strategies()
+    regime_filter = BreadthRegimeFilter()
+    columns: dict[str, str] = {}
+    for spec in strategies:
+        columns.update(spec.columns())
+    columns.update(regime_filter.columns())
+    feature_columns = set(PANEL_COLUMNS) - {"day", "symbol"}
+    warmup = max(warmup_periods(columns, feature_columns).values(), default=0)
+    load_start = start - timedelta(days=int(warmup * 1.7) + 10) if start else None
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=load_start,
+            end=end,
+            symbols=list(symbols) or None,
+        )
+    core = QuantCore(panel, strategies=strategies, regime_filter=regime_filter)
+    trading_panel = panel if start is None else panel.filter(pl.col("day") >= start)
+    try:
+        result = run_backtest(trading_panel, core, config=EngineConfig(initial_cash=cash))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(result.stats.model_dump_json())
+    actions = Counter(intervention.action for intervention in core.interventions)
+    click.echo(json.dumps({"halted": core.gate.halted, "interventions": dict(actions)}))
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        result.equity.write_parquet(out_dir / "equity.parquet")
+        result.trades.write_parquet(out_dir / "trades.parquet")
+        result.rejections.write_parquet(out_dir / "rejections.parquet")
+        interventions_frame(core.interventions).write_parquet(out_dir / "interventions.parquet")
+        click.echo(str(out_dir))
 
 
 @main.command()
