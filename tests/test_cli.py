@@ -83,7 +83,8 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
 
     runner = CliRunner()
     out_dir = tmp_path / "bt"
-    result = runner.invoke(main, ["backtest", "--out", str(out_dir)])
+    report = tmp_path / "tearsheet.html"
+    result = runner.invoke(main, ["backtest", "--out", str(out_dir), "--report", str(report)])
 
     assert result.exit_code == 0, result.output
     stats = json.loads(result.output.splitlines()[0])
@@ -91,6 +92,7 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
     assert stats["trades"] == 0
     for name in ("equity", "trades", "rejections", "interventions"):
         assert (out_dir / f"{name}.parquet").exists()
+    assert report.exists()
 
 
 def test_lookahead_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):

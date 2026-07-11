@@ -17,6 +17,7 @@ from talon.backtest.crosscheck import run_crosscheck
 from talon.backtest.data import PANEL_COLUMNS, load_panel
 from talon.backtest.engine import EngineConfig, run_backtest
 from talon.backtest.lookahead import pick_cuts, verify_factors, verify_replay
+from talon.backtest.report import write_tearsheet
 from talon.config import TalonSettings, load_settings
 from talon.data.state import StateDB
 from talon.data.store import (
@@ -198,12 +199,14 @@ def backfill_daily_command(years: int | None, start_text: str | None, end_text: 
 @click.option("--symbol", "symbols", multiple=True)
 @click.option("--cash", type=float, default=10_000_000.0, show_default=True)
 @click.option("--out", "out_dir", type=click.Path(path_type=Path), default=None)
+@click.option("--report", "report_path", type=click.Path(path_type=Path), default=None)
 def backtest(
     start_text: str | None,
     end_text: str | None,
     symbols: tuple[str, ...],
     cash: float,
     out_dir: Path | None,
+    report_path: Path | None,
 ) -> None:
     cfg = load_settings()
     start = date.fromisoformat(start_text) if start_text else None
@@ -241,6 +244,13 @@ def backtest(
         result.rejections.write_parquet(out_dir / "rejections.parquet")
         interventions_frame(core.interventions).write_parquet(out_dir / "interventions.parquet")
         click.echo(str(out_dir))
+    if report_path is not None:
+        try:
+            title = f"talon {result.stats.start} ~ {result.stats.end}"
+            write_tearsheet(result, report_path, title=title)
+        except TalonError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(str(report_path))
 
 
 @main.command()
