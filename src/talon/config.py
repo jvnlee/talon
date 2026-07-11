@@ -39,6 +39,9 @@ class TalonSettings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    dart_api_key: str = ""
+    dart_throttle_seconds: float = 0.5
+
     universe_size: int = 300
     universe_min_trading_value: float = 1_000_000_000.0
     pinned_symbols: CsvList = []

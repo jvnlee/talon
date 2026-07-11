@@ -14,6 +14,7 @@ INDICATOR_DAILY = "indicators_1d"
 INDEX_DAILY = "index_1d"
 INVESTOR_TRADING = "investor_trading"
 DELISTING = "delisting"
+DART_FILINGS = "dart_filings"
 ADJUST_FACTORS = "adjust_factors"
 ADJUST_MANIFEST = "adjust_manifest"
 

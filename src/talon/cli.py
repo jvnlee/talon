@@ -2,6 +2,7 @@ import inspect
 import json
 import logging
 import sys
+import time
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -27,6 +28,7 @@ from talon.config import TalonSettings, load_settings
 from talon.data.state import StateDB
 from talon.data.store import (
     DAILY_CANDLES,
+    DART_FILINGS,
     DELISTING,
     INDICATOR_MINUTE,
     MINUTE_CANDLES,
@@ -198,6 +200,70 @@ def backfill_daily_command(years: int | None, start_text: str | None, end_text: 
                 progress=report,
             )
     click.echo(summary.model_dump_json())
+
+
+@main.group()
+def dart() -> None:
+    """DART 전자공시 수집."""
+
+
+@dart.command("backfill")
+@click.option("--start", "start_text", required=True, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--types", "types_text", default="A,B,D", show_default=True)
+@click.option("--force", is_flag=True)
+def dart_backfill(
+    start_text: str,
+    end_text: str | None,
+    types_text: str,
+    force: bool,
+) -> None:
+    from talon.sources.dart import fetch_filings
+
+    cfg = load_settings()
+    if not cfg.dart_api_key:
+        raise click.ClickException(
+            "DART API 키가 없습니다. https://opendart.fss.or.kr 에서 발급 후 "
+            "~/.talon/env 에 TALON_DART_API_KEY=<키> 를 추가하세요"
+        )
+    start = date.fromisoformat(start_text)
+    end = date.fromisoformat(end_text) if end_text else _today_kst()
+    if end < start:
+        raise click.ClickException("종료일이 시작일보다 빠릅니다")
+    types = tuple(part.strip() for part in types_text.split(",") if part.strip())
+    with job_lock(cfg.locks_dir / "dart.lock") as acquired:
+        if not acquired:
+            click.echo("dart backfill이 이미 실행 중입니다")
+            return
+        snapshots = DatePartitionedStore(cfg.parquet_dir)
+        total = (end - start).days + 1
+        written = skipped = failed = 0
+        day = start
+        index = 0
+        while day <= end:
+            index += 1
+            if not force and snapshots.has_date(DART_FILINGS, day):
+                skipped += 1
+                day += timedelta(days=1)
+                continue
+            try:
+                frame = fetch_filings(cfg.dart_api_key, day, types=types)
+            except TalonError as exc:
+                failed += 1
+                log.warning("dart %s 실패: %s", day, exc)
+                if failed >= 5:
+                    raise click.ClickException(f"연속 실패 누적으로 중단: {exc}") from exc
+                day += timedelta(days=1)
+                continue
+            snapshots.write_date(DART_FILINGS, day, frame)
+            written += 1
+            if index % 25 == 0 or day == end:
+                click.echo(f"{index}/{total} {day} ({frame.height}건)")
+            time.sleep(cfg.dart_throttle_seconds)
+            day += timedelta(days=1)
+    click.echo(
+        json.dumps({"written": written, "skipped": skipped, "failed": failed, "total": total})
+    )
 
 
 def _columns_warmup(strategies: list[StrategySpec], regime_filter: BreadthRegimeFilter) -> int:
