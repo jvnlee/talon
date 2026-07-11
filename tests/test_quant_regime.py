@@ -37,7 +37,7 @@ def test_neutral_between_thresholds():
 def test_bear_when_breadth_low():
     regime = BreadthRegimeFilter().assess(frame([True] * 3 + [False] * 7))
     assert regime.label == "bear"
-    assert regime.exposure == 0.0
+    assert regime.exposure == 0.5
 
 
 def test_no_data_is_bear():

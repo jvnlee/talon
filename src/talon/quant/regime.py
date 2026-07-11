@@ -29,6 +29,7 @@ class RegimeConfig:
     bear_breadth: float = 0.35
     bull_exposure: float = 1.0
     neutral_exposure: float = 0.6
+    bear_exposure: float = 0.5
     bull_weights: Mapping[str, float] = field(
         default_factory=lambda: {"momo_breakout": 1.0, "pullback": 1.0, "meanrev": 0.5}
     )
@@ -58,7 +59,7 @@ class BreadthRegimeFilter:
                 weights=config.bull_weights,
             )
         if breadth <= config.bear_breadth:
-            return Regime(label=BEAR, exposure=0.0, breadth=breadth, weights={})
+            return Regime(label=BEAR, exposure=config.bear_exposure, breadth=breadth, weights={})
         return Regime(
             label=NEUTRAL,
             exposure=config.neutral_exposure,
