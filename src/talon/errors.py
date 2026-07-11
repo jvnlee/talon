@@ -8,3 +8,7 @@ class SourceError(TalonError):
 
 class SchemaDriftError(SourceError):
     pass
+
+
+class FactorExpressionError(TalonError):
+    pass
