@@ -451,3 +451,33 @@ def test_backtest_is_deterministic():
 def test_empty_panel_raises():
     with pytest.raises(ValueError):
         run_backtest(pl.DataFrame(), ScriptedStrategy())
+
+
+def test_close_notifies_strategy_with_trade_event():
+    class Recorder(ScriptedStrategy):
+        def __init__(self, script=None):
+            super().__init__(script)
+            self.closed = []
+
+        def on_close(self, trade):
+            self.closed.append(trade)
+
+    panel = build_panel([bar(d(i), "AAA", 100) for i in range(4)])
+    strategy = Recorder(
+        {
+            d(0): [Order("buy", "AAA", budget=1_000_000)],
+            d(1): [Order("sell", "AAA")],
+        }
+    )
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    trade = result.trades.row(0, named=True)
+    event = strategy.closed[0]
+    assert event.symbol == "AAA"
+    assert event.entry_day == d(1)
+    assert event.exit_day == d(2)
+    assert event.entry_notional == pytest.approx(trade["entry_notional"])
+    assert event.pnl == pytest.approx(trade["pnl"])
+    assert event.return_pct == pytest.approx(trade["return_pct"])
+    assert event.reason == "strategy"

@@ -51,6 +51,17 @@ class Order:
 
 
 @dataclass(frozen=True)
+class ClosedTrade:
+    symbol: str
+    entry_day: date
+    exit_day: date
+    entry_notional: float
+    pnl: float
+    return_pct: float
+    reason: str
+
+
+@dataclass(frozen=True)
 class PositionView:
     symbol: str
     shares: float
@@ -344,6 +355,19 @@ class _Run:
             }
         )
         del self.positions[position.symbol]
+        handler = getattr(self.strategy, "on_close", None)
+        if handler is not None:
+            handler(
+                ClosedTrade(
+                    symbol=position.symbol,
+                    entry_day=position.entry_day,
+                    exit_day=day,
+                    entry_notional=position.entry_notional,
+                    pnl=pnl,
+                    return_pct=pnl / position.entry_notional,
+                    reason=reason,
+                )
+            )
 
     def _mark(self, day: date, bars: dict[str, dict[str, Any]]) -> None:
         value = 0.0
