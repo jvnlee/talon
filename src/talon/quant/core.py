@@ -9,12 +9,44 @@ from talon.quant.regime import BreadthRegimeFilter, Regime
 from talon.quant.risk import Intervention, RiskGate
 from talon.quant.signals import Signal, StrategySpec
 from talon.quant.strategies import default_strategies
+from talon.quant.universe import LiquidityUniverse
 
 
 class RegimeAssessor(Protocol):
     def columns(self) -> dict[str, str]: ...
 
     def assess(self, day_frame: pl.DataFrame) -> Regime: ...
+
+
+CLOSED_TRADES_SCHEMA: dict[str, pl.DataType] = {
+    "strategy": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "entry_day": pl.Date(),
+    "exit_day": pl.Date(),
+    "entry_notional": pl.Float64(),
+    "pnl": pl.Float64(),
+    "return_pct": pl.Float64(),
+    "reason": pl.Utf8(),
+}
+
+
+def closed_trades_frame(closed: list[tuple[str | None, ClosedTrade]]) -> pl.DataFrame:
+    return pl.DataFrame(
+        [
+            {
+                "strategy": strategy,
+                "symbol": trade.symbol,
+                "entry_day": trade.entry_day,
+                "exit_day": trade.exit_day,
+                "entry_notional": trade.entry_notional,
+                "pnl": trade.pnl,
+                "return_pct": trade.return_pct,
+                "reason": trade.reason,
+            }
+            for strategy, trade in closed
+        ],
+        schema=CLOSED_TRADES_SCHEMA,
+    )
 
 
 class QuantCore:
@@ -24,6 +56,7 @@ class QuantCore:
         strategies: list[StrategySpec] | None = None,
         regime_filter: RegimeAssessor | None = None,
         gate: RiskGate | None = None,
+        universe: LiquidityUniverse | None = None,
     ) -> None:
         self.strategies = strategies if strategies is not None else default_strategies()
         names = [spec.name for spec in self.strategies]
@@ -33,6 +66,7 @@ class QuantCore:
             regime_filter if regime_filter is not None else BreadthRegimeFilter()
         )
         self.gate = gate if gate is not None else RiskGate()
+        self.universe = universe
         columns: dict[str, str] = {}
         for spec in self.strategies:
             columns.update(spec.columns())
@@ -70,7 +104,8 @@ class QuantCore:
                 self._owner.pop(symbol, None)
         self._pending = set()
 
-        regime = self.regime_filter.assess(frame)
+        tradable = frame if self.universe is None else self.universe.filter(frame)
+        regime = self.regime_filter.assess(tradable)
         sells: list[Order] = []
         for symbol, position in sorted(portfolio.positions.items()):
             spec = self._specs.get(self._owner.get(symbol, ""))
@@ -82,7 +117,7 @@ class QuantCore:
 
         signals: list[Signal] = []
         for spec in self.strategies:
-            signals.extend(spec.candidates(frame))
+            signals.extend(spec.candidates(tradable))
         result = self.gate.apply(view.day, portfolio, signals, regime)
         for signal in result.approved:
             self._owner[signal.symbol] = signal.strategy

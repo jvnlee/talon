@@ -4,10 +4,11 @@ import polars as pl
 import pytest
 
 from talon.backtest.engine import EngineConfig, run_backtest
-from talon.quant.core import QuantCore
+from talon.quant.core import QuantCore, closed_trades_frame
 from talon.quant.regime import Regime
 from talon.quant.risk import RiskGate
 from talon.quant.signals import StrategySpec
+from talon.quant.universe import LiquidityUniverse
 
 BASE = date(2026, 1, 5)
 
@@ -209,3 +210,65 @@ def test_duplicate_strategy_names_rejected():
     panel = build_panel([bar(d(0), "AAA", 100.0)])
     with pytest.raises(ValueError, match="중복"):
         QuantCore(panel, strategies=[spec, spec], regime_filter=BullStub())
+
+
+def test_universe_gates_entries_but_not_exits():
+    spec = StrategySpec(
+        name="teststrat",
+        entry=("close >= 100",),
+        score="close",
+        stop="close - 50",
+        target="close + 50",
+        exit="close < 95",
+        max_hold_days=50,
+    )
+    rows = []
+    for i in range(4):
+        close = 94.0 if i >= 2 else 100.0
+        rows.append(bar(d(i), "000010", close, volume=1e6))
+        rows.append(bar(d(i), "000020", 100.0, volume=1.0))
+        rows.append(bar(d(i), "000015", 100.0, volume=1e6))
+    panel = build_panel(rows)
+    core = QuantCore(
+        panel,
+        strategies=[spec],
+        regime_filter=BullStub(),
+        gate=RiskGate(),
+        universe=LiquidityUniverse(size=1, min_value=0.0),
+    )
+    result = run(panel, core)
+
+    trade = result.trades.row(0, named=True)
+    assert trade["symbol"] == "000010"
+    assert trade["reason"] == "strategy"
+    assert trade["exit_day"] == d(3)
+    assert result.stats.open_positions == 0
+
+
+def test_closed_trades_frame_carries_strategy():
+    spec = StrategySpec(
+        name="teststrat",
+        entry=("close == 100",),
+        score="close",
+        stop="close - 50",
+        target="close + 50",
+        exit="close < 95",
+        max_hold_days=50,
+    )
+    panel = build_panel(
+        [
+            bar(d(0), "AAA", 100.0),
+            bar(d(1), "AAA", 100.0, close=94.0, low=94.0),
+            bar(d(2), "AAA", 94.0),
+            bar(d(3), "AAA", 94.0),
+        ]
+    )
+    core = make_core(panel, spec)
+    run(panel, core)
+
+    frame = closed_trades_frame(core.closed_trades)
+    row = frame.row(0, named=True)
+    assert row["strategy"] == "teststrat"
+    assert row["symbol"] == "AAA"
+    assert row["reason"] == "strategy"
+    assert closed_trades_frame([]).is_empty()

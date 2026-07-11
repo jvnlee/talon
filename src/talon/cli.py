@@ -42,11 +42,12 @@ from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
 from talon.markets.kr import krx_calendar
 from talon.notify.telegram import Alerter, TelegramNotifier
-from talon.quant.core import QuantCore
+from talon.quant.core import QuantCore, closed_trades_frame
 from talon.quant.regime import BreadthRegimeFilter
 from talon.quant.risk import interventions_frame
 from talon.quant.signals import StrategySpec
 from talon.quant.strategies import default_strategies
+from talon.quant.universe import LiquidityUniverse
 from talon.sources.toss import TossClient
 from talon.timeutil import KST, now_utc
 
@@ -214,6 +215,10 @@ def _warmup_start(start: date | None, warmup: int) -> date | None:
     return start - timedelta(days=int(warmup * 1.7) + 10)
 
 
+def _trading_universe(cfg: TalonSettings) -> LiquidityUniverse:
+    return LiquidityUniverse(size=cfg.universe_size, min_value=cfg.universe_min_trading_value)
+
+
 def _record_trial(
     cfg: TalonSettings,
     stats: BacktestStats,
@@ -262,7 +267,12 @@ def backtest(
             end=end,
             symbols=list(symbols) or None,
         )
-    core = QuantCore(panel, strategies=strategies, regime_filter=regime_filter)
+    core = QuantCore(
+        panel,
+        strategies=strategies,
+        regime_filter=regime_filter,
+        universe=_trading_universe(cfg),
+    )
     trading_panel = panel if start is None else panel.filter(pl.col("day") >= start)
     try:
         result = run_backtest(trading_panel, core, config=EngineConfig(initial_cash=cash))
@@ -281,6 +291,7 @@ def backtest(
         result.trades.write_parquet(out_dir / "trades.parquet")
         result.rejections.write_parquet(out_dir / "rejections.parquet")
         interventions_frame(core.interventions).write_parquet(out_dir / "interventions.parquet")
+        closed_trades_frame(core.closed_trades).write_parquet(out_dir / "strategy_trades.parquet")
         click.echo(str(out_dir))
     if report_path is not None:
         try:
@@ -329,7 +340,12 @@ def evaluate(
     try:
         evaluation = evaluate_gate1(
             panel,
-            make_core=lambda p: QuantCore(p, strategies=strategies, regime_filter=regime_filter),
+            make_core=lambda p: QuantCore(
+                p,
+                strategies=strategies,
+                regime_filter=regime_filter,
+                universe=_trading_universe(cfg),
+            ),
             benchmark_daily=kospi,
             oos_start=oos_start,
             trading_start=start,
@@ -425,7 +441,12 @@ def sensitivity(
     trading_panel = panel if start is None else panel.filter(pl.col("day") >= start)
 
     def execute(specs: list[StrategySpec], desc: list[str]) -> tuple[BacktestStats, QuantCore]:
-        core = QuantCore(panel, strategies=specs, regime_filter=regime_filter)
+        core = QuantCore(
+            panel,
+            strategies=specs,
+            regime_filter=regime_filter,
+            universe=_trading_universe(cfg),
+        )
         result = run_backtest(trading_panel, core, config=EngineConfig(initial_cash=cash))
         _record_trial(cfg, result.stats, symbols, desc)
         return result.stats, core
