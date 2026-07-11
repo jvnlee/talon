@@ -4,7 +4,7 @@ import pytest
 
 from talon.backtest.engine import ClosedTrade, PortfolioView, PositionView
 from talon.quant.regime import Regime
-from talon.quant.risk import RiskGate, interventions_frame
+from talon.quant.risk import RiskConfig, RiskGate, interventions_frame
 from talon.quant.signals import Signal
 
 D0 = date(2026, 1, 5)
@@ -248,7 +248,7 @@ def test_weekly_breaker_blocks_rest_of_week_then_resets():
 
 
 def test_cooldown_after_consecutive_losses():
-    gate = RiskGate()
+    gate = RiskGate(RiskConfig(cooldown_after_losses=3))
     for i in (1, 2, 3):
         gate.record_close(closed("AAA", d(i), -1_000.0), "s1")
 

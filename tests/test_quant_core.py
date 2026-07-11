@@ -6,7 +6,7 @@ import pytest
 from talon.backtest.engine import EngineConfig, run_backtest
 from talon.quant.core import QuantCore, closed_trades_frame
 from talon.quant.regime import Regime
-from talon.quant.risk import RiskGate
+from talon.quant.risk import RiskConfig, RiskGate
 from talon.quant.signals import StrategySpec
 from talon.quant.universe import LiquidityUniverse
 
@@ -110,7 +110,12 @@ def test_three_stop_outs_trigger_cooldown():
             bar(d(5), "AAA", 88.0),
         ]
     )
-    core = make_core(panel, spec)
+    core = QuantCore(
+        panel,
+        strategies=[spec],
+        regime_filter=BullStub(),
+        gate=RiskGate(RiskConfig(cooldown_after_losses=3)),
+    )
     result = run(panel, core)
 
     assert result.trades.height == 3

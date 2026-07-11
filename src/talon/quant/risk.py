@@ -32,7 +32,7 @@ class RiskConfig:
     max_positions: int = 5
     daily_loss_halt_pct: float = 0.02
     weekly_loss_halt_pct: float = 0.05
-    cooldown_after_losses: int = 3
+    cooldown_after_losses: int = 10
     cooldown_days: int = 5
     drawdown_reduce_pct: float = 0.10
     drawdown_liquidate_pct: float = 0.15
