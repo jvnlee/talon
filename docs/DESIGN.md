@@ -74,6 +74,7 @@
 | [0009](./adr/0009-subscription-llm-harness.md) | LLM은 Claude Max 20x 공식 CLI 경로만 |
 | [0010](./adr/0010-tech-data-stack.md) | Python/Polars, Parquet+SQLite, 데이터 소스 이중화 |
 | [0011](./adr/0011-promotion-gates.md) | 관문 기준은 결과를 보기 전에 고정 |
+| [0012](./adr/0012-close-execution-overnight.md) | 종가 체결(오버나이트) 실행 모드 도입, 초기 전략 3종 벤치 |
 
 ## 열린 질문
 
