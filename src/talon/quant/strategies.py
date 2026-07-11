@@ -100,7 +100,7 @@ def mean_reversion(
 
 def close_strength(
     *,
-    strength_pct: float = 3.0,
+    strength_pct: float = 3.75,
     volume_surge: float = 2.5,
     min_value: float = MIN_TRADING_VALUE,
     stop_atr: float = 2.0,
