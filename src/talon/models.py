@@ -130,6 +130,12 @@ class BackfillSummary(BaseModel):
     failed: list[str] = []
 
 
+class IndexBackfillSummary(BaseModel):
+    status: str
+    rows: dict[str, int] = {}
+    failed: list[str] = []
+
+
 class AdjustSummary(BaseModel):
     status: str
     symbols: int = 0
