@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 from talon.quant.signals import StrategySpec
 
 MIN_TRADING_VALUE = 1_000_000_000.0
@@ -90,5 +92,12 @@ def mean_reversion(
     )
 
 
+STRATEGY_FACTORIES: dict[str, Callable[..., StrategySpec]] = {
+    "momo_breakout": momentum_breakout,
+    "pullback": pullback,
+    "meanrev": mean_reversion,
+}
+
+
 def default_strategies() -> list[StrategySpec]:
-    return [momentum_breakout(), pullback(), mean_reversion()]
+    return [factory() for factory in STRATEGY_FACTORIES.values()]

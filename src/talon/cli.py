@@ -1,8 +1,9 @@
+import inspect
 import json
 import logging
 import sys
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -19,8 +20,9 @@ from talon.backtest.data import PANEL_COLUMNS, load_panel
 from talon.backtest.engine import EngineConfig, run_backtest
 from talon.backtest.evaluate import evaluate_gate1
 from talon.backtest.lookahead import pick_cuts, verify_factors, verify_replay
-from talon.backtest.metrics import TRADING_DAYS_PER_YEAR
+from talon.backtest.metrics import TRADING_DAYS_PER_YEAR, BacktestStats
 from talon.backtest.report import write_tearsheet
+from talon.backtest.sensitivity import SweepRun, neighbors, run_sweep
 from talon.config import TalonSettings, load_settings
 from talon.data.state import StateDB
 from talon.data.store import (
@@ -197,20 +199,38 @@ def backfill_daily_command(years: int | None, start_text: str | None, end_text: 
     click.echo(summary.model_dump_json())
 
 
-def _warmup_start(
-    start: date | None,
-    strategies: list[StrategySpec],
-    regime_filter: BreadthRegimeFilter,
-) -> date | None:
-    if start is None:
-        return None
+def _columns_warmup(strategies: list[StrategySpec], regime_filter: BreadthRegimeFilter) -> int:
     columns: dict[str, str] = {}
     for spec in strategies:
         columns.update(spec.columns())
     columns.update(regime_filter.columns())
     feature_columns = set(PANEL_COLUMNS) - {"day", "symbol"}
-    warmup = max(warmup_periods(columns, feature_columns).values(), default=0)
+    return max(warmup_periods(columns, feature_columns).values(), default=0)
+
+
+def _warmup_start(start: date | None, warmup: int) -> date | None:
+    if start is None:
+        return None
     return start - timedelta(days=int(warmup * 1.7) + 10)
+
+
+def _record_trial(
+    cfg: TalonSettings,
+    stats: BacktestStats,
+    symbols: tuple[str, ...],
+    strategies_desc: list[str],
+) -> int:
+    daily = stats.sharpe / TRADING_DAYS_PER_YEAR**0.5 if stats.sharpe is not None else None
+    with StateDB(cfg.state_path) as state:
+        return state.record_trial(
+            start=stats.start,
+            end=stats.end,
+            symbols=sorted(symbols),
+            strategies=strategies_desc,
+            sharpe_daily=daily,
+            trades=stats.trades,
+            total_return_pct=stats.total_return_pct,
+        )
 
 
 @main.command()
@@ -233,7 +253,7 @@ def backtest(
     end = date.fromisoformat(end_text) if end_text else None
     strategies = default_strategies()
     regime_filter = BreadthRegimeFilter()
-    load_start = _warmup_start(start, strategies, regime_filter)
+    load_start = _warmup_start(start, _columns_warmup(strategies, regime_filter))
     with runtime(cfg, toss="skip") as rt:
         panel = load_panel(
             rt.snapshots,
@@ -249,18 +269,7 @@ def backtest(
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     stats = result.stats
-    with StateDB(cfg.state_path) as state:
-        trial_id = state.record_trial(
-            start=stats.start,
-            end=stats.end,
-            symbols=sorted(symbols),
-            strategies=[spec.name for spec in strategies],
-            sharpe_daily=(
-                stats.sharpe / TRADING_DAYS_PER_YEAR**0.5 if stats.sharpe is not None else None
-            ),
-            trades=stats.trades,
-            total_return_pct=stats.total_return_pct,
-        )
+    trial_id = _record_trial(cfg, stats, symbols, [spec.name for spec in strategies])
     click.echo(stats.model_dump_json())
     actions = Counter(intervention.action for intervention in core.interventions)
     click.echo(
@@ -303,7 +312,7 @@ def evaluate(
     end = date.fromisoformat(end_text) if end_text else None
     strategies = default_strategies()
     regime_filter = BreadthRegimeFilter()
-    load_start = _warmup_start(start, strategies, regime_filter)
+    load_start = _warmup_start(start, _columns_warmup(strategies, regime_filter))
     with runtime(cfg, toss="skip") as rt:
         panel = load_panel(
             rt.snapshots,
@@ -343,6 +352,122 @@ def evaluate(
             result.rejections.write_parquet(out_dir / f"{label}_rejections.parquet")
         click.echo(str(out_dir))
     if not report.passed:
+        sys.exit(1)
+
+
+def _numeric_defaults(factory: Callable[..., StrategySpec]) -> dict[str, int | float]:
+    return {
+        name: parameter.default
+        for name, parameter in inspect.signature(factory).parameters.items()
+        if isinstance(parameter.default, int | float) and not isinstance(parameter.default, bool)
+    }
+
+
+@main.command()
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--symbol", "symbols", multiple=True)
+@click.option("--cash", type=float, default=10_000_000.0, show_default=True)
+@click.option("--strategy", "strategy_filter", multiple=True)
+@click.option("--out", "out_path", type=click.Path(path_type=Path), default=None)
+def sensitivity(
+    start_text: str | None,
+    end_text: str | None,
+    symbols: tuple[str, ...],
+    cash: float,
+    strategy_filter: tuple[str, ...],
+    out_path: Path | None,
+) -> None:
+    from talon.quant.strategies import STRATEGY_FACTORIES
+
+    cfg = load_settings()
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    factories = dict(STRATEGY_FACTORIES)
+    if strategy_filter:
+        unknown = sorted(set(strategy_filter) - set(factories))
+        if unknown:
+            raise click.ClickException(f"알 수 없는 전략: {unknown} (지원: {sorted(factories)})")
+        factories = {name: factories[name] for name in factories if name in strategy_filter}
+    params = {name: _numeric_defaults(factory) for name, factory in factories.items()}
+
+    def variant(target: str, param: str, value: int | float) -> list[StrategySpec]:
+        return [
+            factory(**{param: value}) if name == target else factory()
+            for name, factory in STRATEGY_FACTORIES.items()
+        ]
+
+    def variant_desc(target: str, param: str, value: int | float) -> list[str]:
+        return [
+            f"{name}({param}={value:g})" if name == target else name for name in STRATEGY_FACTORIES
+        ]
+
+    variants: dict[tuple[str, str, float], list[StrategySpec]] = {}
+    for name, strategy_params in params.items():
+        for param, base_value in strategy_params.items():
+            for value in neighbors(base_value):
+                variants[(name, param, float(value))] = variant(name, param, value)
+
+    regime_filter = BreadthRegimeFilter()
+    base_strategies = default_strategies()
+    warmup = _columns_warmup(base_strategies, regime_filter)
+    for specs in variants.values():
+        warmup = max(warmup, _columns_warmup(specs, regime_filter))
+    load_start = _warmup_start(start, warmup)
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=load_start,
+            end=end,
+            symbols=list(symbols) or None,
+        )
+    trading_panel = panel if start is None else panel.filter(pl.col("day") >= start)
+
+    def execute(specs: list[StrategySpec], desc: list[str]) -> tuple[BacktestStats, QuantCore]:
+        core = QuantCore(panel, strategies=specs, regime_filter=regime_filter)
+        result = run_backtest(trading_panel, core, config=EngineConfig(initial_cash=cash))
+        _record_trial(cfg, result.stats, symbols, desc)
+        return result.stats, core
+
+    def fmt(value: float | None) -> str:
+        return f"{value:.2f}" if value is not None else "N/A"
+
+    try:
+        base_stats, _ = execute(base_strategies, [spec.name for spec in base_strategies])
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        f"기준 실행: sharpe={fmt(base_stats.sharpe)} "
+        f"수익률={base_stats.total_return_pct:.1f}% 트레이드={base_stats.trades}건"
+    )
+
+    def runner(name: str, param: str, value: int | float) -> tuple[BacktestStats, int | None]:
+        specs = variants[(name, param, float(value))]
+        stats, core = execute(specs, variant_desc(name, param, value))
+        return stats, core.trades_by(name)
+
+    def show(run: SweepRun) -> None:
+        click.echo(
+            f"{'✓' if run.ok else '✗'} {run.strategy}.{run.param}={run.value:g} "
+            f"sharpe={fmt(run.sharpe)} 수익률={run.total_return_pct:.1f}% "
+            f"트레이드={run.trades}건 (전략 {run.strategy_trades}건)"
+        )
+
+    report = run_sweep(base_stats=base_stats, params=params, runner=runner, progress=show)
+    click.echo(report.model_dump_json())
+    for verdict in report.params:
+        status = "✓" if verdict.robust else "✗"
+        note = "" if verdict.active else " [비활성 — 스윕 구간에서 해당 전략 무거래]"
+        click.echo(
+            f"{status} {verdict.strategy}.{verdict.param} (기준값 {verdict.base_value:g}){note}"
+        )
+    click.echo(f"민감도: {'통과' if report.robust else '미통과'}")
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report.model_dump_json(indent=2))
+        click.echo(str(out_path))
+    if not report.robust:
         sys.exit(1)
 
 

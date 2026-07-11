@@ -200,6 +200,48 @@ def test_index_backfill_smoke(tmp_path, monkeypatch, cfg):
     assert summary["rows"] == {"KOSPI": 1}
 
 
+def test_sensitivity_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
+    import json
+
+    from talon.data.state import StateDB
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    _write_flat_daily(snapshots, series)
+
+    runner = CliRunner()
+    out_path = tmp_path / "sensitivity.json"
+    result = runner.invoke(main, ["sensitivity", "--strategy", "meanrev", "--out", str(out_path)])
+
+    assert result.exit_code == 1, result.output
+    json_line = next(
+        line for line in result.output.splitlines() if line.startswith('{"base_sharpe"')
+    )
+    report = json.loads(json_line)
+    assert report["robust"] is False
+    swept = {(item["strategy"], item["param"]) for item in report["params"]}
+    assert ("meanrev", "band_days") in swept
+    assert all(strategy == "meanrev" for strategy, _ in swept)
+    assert all(item["active"] is False for item in report["params"])
+    assert "비활성" in result.output
+    assert "민감도: 미통과" in result.output
+    assert out_path.exists()
+
+    with StateDB(cfg.state_path) as state:
+        assert state.trial_count() == 1 + 2 * len(swept)
+
+
+def test_sensitivity_rejects_unknown_strategy(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["sensitivity", "--strategy", "nope"])
+
+    assert result.exit_code == 1
+    assert "알 수 없는 전략" in result.output
+
+
 def test_lookahead_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
     import json
 
