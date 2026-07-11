@@ -27,7 +27,7 @@ def interventions_frame(interventions: list["Intervention"]) -> pl.DataFrame:
 
 @dataclass(frozen=True)
 class RiskConfig:
-    risk_per_trade_pct: float = 0.007
+    risk_per_trade_pct: float = 0.010
     max_weight_pct: float = 0.20
     max_positions: int = 5
     daily_loss_halt_pct: float = 0.02

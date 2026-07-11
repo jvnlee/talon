@@ -82,7 +82,7 @@ def test_r_sizing_creates_budgeted_buy():
     order = result.orders[0]
     assert order.kind == "buy"
     assert order.symbol == "AAA"
-    assert order.budget == pytest.approx(140 * 10_000.0)
+    assert order.budget == pytest.approx(200 * 10_000.0)
     assert order.stop == 9_500.0
     assert order.target == 11_000.0
     assert [s.symbol for s in result.approved] == ["AAA"]
