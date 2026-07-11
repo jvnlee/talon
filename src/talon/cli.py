@@ -219,6 +219,21 @@ def _trading_universe(cfg: TalonSettings) -> LiquidityUniverse:
     return LiquidityUniverse(size=cfg.universe_size, min_value=cfg.universe_min_trading_value)
 
 
+def _selected_strategies(strategy_filter: tuple[str, ...]) -> list[StrategySpec]:
+    from talon.quant.strategies import STRATEGY_FACTORIES
+
+    if not strategy_filter:
+        return default_strategies()
+    unknown = sorted(set(strategy_filter) - set(STRATEGY_FACTORIES))
+    if unknown:
+        raise click.ClickException(
+            f"알 수 없는 전략: {unknown} (지원: {sorted(STRATEGY_FACTORIES)})"
+        )
+    return [
+        factory() for name, factory in STRATEGY_FACTORIES.items() if name in strategy_filter
+    ]
+
+
 def _record_trial(
     cfg: TalonSettings,
     stats: BacktestStats,
@@ -243,6 +258,7 @@ def _record_trial(
 @click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
 @click.option("--symbol", "symbols", multiple=True)
 @click.option("--cash", type=float, default=10_000_000.0, show_default=True)
+@click.option("--strategy", "strategy_filter", multiple=True)
 @click.option("--out", "out_dir", type=click.Path(path_type=Path), default=None)
 @click.option("--report", "report_path", type=click.Path(path_type=Path), default=None)
 def backtest(
@@ -250,13 +266,14 @@ def backtest(
     end_text: str | None,
     symbols: tuple[str, ...],
     cash: float,
+    strategy_filter: tuple[str, ...],
     out_dir: Path | None,
     report_path: Path | None,
 ) -> None:
     cfg = load_settings()
     start = date.fromisoformat(start_text) if start_text else None
     end = date.fromisoformat(end_text) if end_text else None
-    strategies = default_strategies()
+    strategies = _selected_strategies(strategy_filter)
     regime_filter = BreadthRegimeFilter()
     load_start = _warmup_start(start, _columns_warmup(strategies, regime_filter))
     with runtime(cfg, toss="skip") as rt:

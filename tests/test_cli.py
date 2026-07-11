@@ -92,7 +92,7 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
     assert stats["trades"] == 0
     gate_line = json.loads(result.output.splitlines()[1])
     assert gate_line["trial"] == 1
-    for name in ("equity", "trades", "rejections", "interventions"):
+    for name in ("equity", "trades", "rejections", "interventions", "strategy_trades"):
         assert (out_dir / f"{name}.parquet").exists()
     assert report.exists()
 
@@ -101,6 +101,20 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
     with StateDB(cfg.state_path) as state:
         assert state.trial_count() == 1
         assert state.trial_sharpes() == []
+
+
+def test_backtest_strategy_filter(tmp_path, monkeypatch, cfg, snapshots, series):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    _write_flat_daily(snapshots, series)
+
+    runner = CliRunner()
+    ok = runner.invoke(main, ["backtest", "--strategy", "meanrev"])
+    assert ok.exit_code == 0, ok.output
+
+    bad = runner.invoke(main, ["backtest", "--strategy", "nope"])
+    assert bad.exit_code != 0
+    assert "알 수 없는 전략" in bad.output
 
 
 def test_evaluate_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
