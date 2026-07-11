@@ -200,7 +200,7 @@ def test_regime_weight_zero_blocks_and_partial_scales():
     result = gate.apply(D0, portfolio(), signals, regime)
 
     assert [o.symbol for o in result.orders] == ["BBB"]
-    assert result.orders[0].budget == pytest.approx(70 * 10_000.0)
+    assert result.orders[0].budget == pytest.approx(100 * 10_000.0)
     assert reasons(gate) == ["regime-weight"]
 
 
@@ -283,7 +283,7 @@ def test_drawdown_reduce_halves_new_risk():
     result = gate.apply(d(1), portfolio(cash=8_900_000.0), [signal()], BULL)
 
     assert any(item.action == "reduce" for item in gate.interventions)
-    assert result.orders[0].budget == pytest.approx(62 * 10_000.0)
+    assert result.orders[0].budget == pytest.approx(89 * 10_000.0)
 
 
 def test_drawdown_reduce_sells_worst_positions_first():

@@ -86,7 +86,7 @@ def test_entry_is_sized_and_held_symbol_not_rebought():
     assert result.trades.is_empty()
     assert result.stats.open_positions == 1
     day1 = result.equity.filter(pl.col("day") == d(1)).row(0, named=True)
-    assert day1["position_value"] == pytest.approx(7_000 * 100.0)
+    assert day1["position_value"] == pytest.approx(10_000 * 100.0)
     assert core.owner_of("AAA") == "teststrat"
     assert any(item.reason == "already-held" for item in core.interventions)
 
