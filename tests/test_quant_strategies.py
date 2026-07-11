@@ -56,6 +56,7 @@ def test_momentum_breakout_fires_on_new_high_with_volume():
     assert [c.symbol for c in breakout] == ["AAA"]
     candidate = breakout[0]
     assert candidate.stop < 110.0 < candidate.target
+    assert candidate.min_open > 110.0
     assert candidate.score > 0
 
 
@@ -83,6 +84,7 @@ def test_pullback_fires_on_dip_rebound_in_uptrend():
     assert [c.symbol for c in rebound] == ["AAA"]
     candidate = rebound[0]
     assert candidate.stop < 117.0 < candidate.target
+    assert candidate.min_open > 117.0
 
 
 def test_mean_reversion_fires_on_oversold_dip_in_uptrend():
@@ -101,6 +103,7 @@ def test_mean_reversion_fires_on_oversold_dip_in_uptrend():
     candidate = oversold[0]
     assert candidate.stop < 103.0
     assert candidate.target > 103.0
+    assert candidate.min_open < 103.0
 
     with_bounce = build_panel([*rows, bar(31, "AAA", 106.0, open_=103.0, high=106.0, low=103.0)])
     bounced = augment(with_bounce, spec).filter(pl.col("day") == d(31))

@@ -48,6 +48,7 @@ class Order:
     budget: float | None = None
     stop: float | None = None
     target: float | None = None
+    min_open: float | None = None
 
 
 @dataclass(frozen=True)
@@ -244,6 +245,9 @@ class _Run:
                 continue
             if self._limit_up(bar):
                 self._reject(day, order, "limit-up")
+                continue
+            if order.min_open is not None and bar["open"] < order.min_open:
+                self._reject(day, order, "no-confirm")
                 continue
             exec_adj = bar["open"] * (1 + self.config.slippage_pct)
             factor = bar["factor"]

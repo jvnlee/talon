@@ -209,6 +209,31 @@ def test_limit_up_open_rejects_buy():
     assert result.stats.open_positions == 0
 
 
+def test_open_below_min_open_rejects_buy():
+    panel = build_panel(
+        [bar(d(0), "AAA", 100), bar(d(1), "AAA", 100), bar(d(2), "AAA", 99, close=103)]
+    )
+    strategy = ScriptedStrategy({d(1): [Order("buy", "AAA", budget=1_000_000, min_open=100.0)]})
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    rejection = result.rejections.row(0, named=True)
+    assert rejection == {"day": d(2), "symbol": "AAA", "kind": "buy", "reason": "no-confirm"}
+    assert result.stats.open_positions == 0
+
+
+def test_open_at_min_open_fills():
+    panel = build_panel(
+        [bar(d(0), "AAA", 100), bar(d(1), "AAA", 100), bar(d(2), "AAA", 100, close=103)]
+    )
+    strategy = ScriptedStrategy({d(1): [Order("buy", "AAA", budget=1_000_000, min_open=100.0)]})
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    assert result.rejections.is_empty()
+    assert result.stats.open_positions == 1
+
+
 def test_limit_down_open_blocks_sells_and_stops():
     panel = build_panel(
         [

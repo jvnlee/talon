@@ -233,6 +233,7 @@ class RiskGate:
                     budget=budget,
                     stop=signal.stop,
                     target=signal.target,
+                    min_open=signal.min_open,
                 )
             )
             approved.append(signal)
@@ -245,6 +246,8 @@ class RiskGate:
             return "no-stop-target"
         values = (signal.ref_price, signal.stop, signal.target)
         if not all(math.isfinite(value) for value in values):
+            return "non-finite-levels"
+        if signal.min_open is not None and not math.isfinite(signal.min_open):
             return "non-finite-levels"
         if signal.stop <= 0:
             return "stop-not-positive"

@@ -44,6 +44,12 @@ def test_columns_without_exit():
     assert "s1__exit" not in spec(exit=None).columns()
 
 
+def test_columns_with_min_open():
+    columns = spec(min_open="close * 1.01").columns()
+    assert columns["s1__min_open"] == "close * 1.01"
+    assert "s1__min_open" not in spec().columns()
+
+
 def day_frame():
     return pl.DataFrame(
         {
@@ -72,6 +78,13 @@ def test_candidates_skip_null_and_false_entries():
 def test_candidate_null_score_becomes_zero():
     frame = day_frame().with_columns(pl.lit(None).cast(pl.Float64).alias("s1__score"))
     assert spec().candidates(frame)[0].score == 0.0
+
+
+def test_candidates_carry_min_open():
+    assert spec().candidates(day_frame())[0].min_open is None
+    frame = day_frame().with_columns(pl.Series("s1__min_open", [111.0, None, None]))
+    candidate = spec(min_open="close * 1.01").candidates(frame)[0]
+    assert candidate.min_open == 111.0
 
 
 def test_wants_exit_true_only_on_true():

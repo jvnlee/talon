@@ -11,6 +11,7 @@ class Signal:
     ref_price: float
     stop: float | None
     target: float | None
+    min_open: float | None = None
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class StrategySpec:
     stop: str
     target: str
     exit: str | None = None
+    min_open: str | None = None
     max_hold_days: int = 20
 
     def __post_init__(self) -> None:
@@ -41,19 +43,24 @@ class StrategySpec:
         exprs[self._column("target")] = self.target
         if self.exit is not None:
             exprs[self._column("exit")] = self.exit
+        if self.min_open is not None:
+            exprs[self._column("min_open")] = self.min_open
         return exprs
 
     def candidates(self, day_frame: pl.DataFrame) -> list[Signal]:
         condition = pl.all_horizontal(
             [pl.col(self._column(f"entry{i}")).fill_null(False) for i in range(len(self.entry))]
         )
-        rows = day_frame.filter(condition).select(
-            "symbol",
+        selections = [
+            pl.col("symbol"),
             pl.col("close").alias("ref_price"),
             pl.col(self._column("score")).alias("score"),
             pl.col(self._column("stop")).alias("stop"),
             pl.col(self._column("target")).alias("target"),
-        )
+        ]
+        if self.min_open is not None:
+            selections.append(pl.col(self._column("min_open")).alias("min_open"))
+        rows = day_frame.filter(condition).select(selections)
         return [
             Signal(
                 strategy=self.name,
@@ -62,6 +69,7 @@ class StrategySpec:
                 ref_price=row["ref_price"],
                 stop=row["stop"],
                 target=row["target"],
+                min_open=row.get("min_open"),
             )
             for row in rows.iter_rows(named=True)
         ]

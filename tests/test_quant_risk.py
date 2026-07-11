@@ -17,9 +17,23 @@ def d(i):
     return D0 + timedelta(days=i)
 
 
-def signal(symbol="AAA", strategy="s1", score=0.5, ref=10_000.0, stop=9_500.0, target=11_000.0):
+def signal(
+    symbol="AAA",
+    strategy="s1",
+    score=0.5,
+    ref=10_000.0,
+    stop=9_500.0,
+    target=11_000.0,
+    min_open=None,
+):
     return Signal(
-        strategy=strategy, symbol=symbol, score=score, ref_price=ref, stop=stop, target=target
+        strategy=strategy,
+        symbol=symbol,
+        score=score,
+        ref_price=ref,
+        stop=stop,
+        target=target,
+        min_open=min_open,
     )
 
 
@@ -92,6 +106,7 @@ def test_rejects_invalid_levels():
         signal(symbol="CCC", stop=10_500.0),
         signal(symbol="DDD", target=9_000.0),
         signal(symbol="EEE", stop=-1.0),
+        signal(symbol="FFF", min_open=float("nan")),
     ]
     result = gate.apply(D0, portfolio(), bad, BULL)
 
@@ -101,8 +116,16 @@ def test_rejects_invalid_levels():
         "stop-not-below-entry",
         "target-not-above-entry",
         "stop-not-positive",
+        "non-finite-levels",
     }
     assert all(item.action == "reject" for item in gate.interventions)
+
+
+def test_buy_order_carries_min_open():
+    gate = RiskGate()
+    result = gate.apply(D0, portfolio(), [signal(min_open=10_100.0)], BULL)
+
+    assert result.orders[0].min_open == 10_100.0
 
 
 def test_max_positions_blocks_when_full():

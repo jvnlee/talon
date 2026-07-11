@@ -19,6 +19,7 @@ def momentum_breakout(
     stop_atr: float = 2.0,
     target_atr: float = 4.0,
     exit_ema_days: int = 10,
+    min_open_atr: float = 0.1,
     max_hold_days: int = 30,
 ) -> StrategySpec:
     atr = _atr()
@@ -34,6 +35,7 @@ def momentum_breakout(
         stop=f"close - {atr} * {stop_atr}",
         target=f"close + {atr} * {target_atr}",
         exit=f"close < EMA(close, {exit_ema_days})",
+        min_open=f"close + {atr} * {min_open_atr}",
         max_hold_days=max_hold_days,
     )
 
@@ -46,6 +48,7 @@ def pullback(
     min_value: float = MIN_TRADING_VALUE,
     stop_atr: float = 0.5,
     target_atr: float = 3.0,
+    min_open_atr: float = 0.1,
     max_hold_days: int = 15,
 ) -> StrategySpec:
     atr = _atr()
@@ -62,6 +65,7 @@ def pullback(
         stop=f"Min(low, {dip_days}) - {atr} * {stop_atr}",
         target=f"close + {atr} * {target_atr}",
         exit=f"close < Mean(close, {trend_days})",
+        min_open=f"close + {atr} * {min_open_atr}",
         max_hold_days=max_hold_days,
     )
 
@@ -73,6 +77,7 @@ def mean_reversion(
     trend_days: int = 120,
     min_value: float = MIN_TRADING_VALUE,
     stop_atr: float = 2.5,
+    gap_guard_atr: float = 0.5,
     max_hold_days: int = 10,
 ) -> StrategySpec:
     atr = _atr()
@@ -88,6 +93,7 @@ def mean_reversion(
         stop=f"close - {atr} * {stop_atr}",
         target=f"Mean(close, {band_days})",
         exit=f"{zscore} >= 0",
+        min_open=f"close - {atr} * {gap_guard_atr}",
         max_hold_days=max_hold_days,
     )
 
