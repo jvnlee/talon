@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 import polars as pl
 
+EXECUTION_MODES = ("open", "close_overnight")
+
 
 @dataclass(frozen=True)
 class Signal:
@@ -12,6 +14,7 @@ class Signal:
     stop: float | None
     target: float | None
     min_open: float | None = None
+    execution: str = "open"
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,7 @@ class StrategySpec:
     target: str
     exit: str | None = None
     min_open: str | None = None
+    execution: str = "open"
     max_hold_days: int = 20
 
     def __post_init__(self) -> None:
@@ -32,6 +36,8 @@ class StrategySpec:
             raise ValueError(f"{self.name}: 진입 조건이 비어 있습니다")
         if self.max_hold_days < 1:
             raise ValueError(f"{self.name}: 최대 보유일은 1 이상이어야 합니다")
+        if self.execution not in EXECUTION_MODES:
+            raise ValueError(f"{self.name}: 지원하지 않는 실행 모드입니다: {self.execution!r}")
 
     def _column(self, part: str) -> str:
         return f"{self.name}__{part}"
@@ -70,6 +76,7 @@ class StrategySpec:
                 stop=row["stop"],
                 target=row["target"],
                 min_open=row.get("min_open"),
+                execution=self.execution,
             )
             for row in rows.iter_rows(named=True)
         ]

@@ -98,12 +98,42 @@ def mean_reversion(
     )
 
 
+def close_strength(
+    *,
+    strength_pct: float = 3.0,
+    volume_surge: float = 2.0,
+    min_value: float = MIN_TRADING_VALUE,
+    stop_atr: float = 2.0,
+    target_atr: float = 4.0,
+    max_hold_days: int = 3,
+) -> StrategySpec:
+    atr = _atr()
+    return StrategySpec(
+        name="close_strength",
+        entry=(
+            f"close / prev_close - 1 >= {strength_pct / 100}",
+            "close >= high",
+            f"volume >= Ref(Mean(volume, 20), 1) * {volume_surge}",
+            "close < prev_close * 1.295",
+            f"Mean(value, 20) >= {min_value}",
+        ),
+        score="close / prev_close - 1",
+        stop=f"close - {atr} * {stop_atr}",
+        target=f"close + {atr} * {target_atr}",
+        execution="close_overnight",
+        max_hold_days=max_hold_days,
+    )
+
+
 STRATEGY_FACTORIES: dict[str, Callable[..., StrategySpec]] = {
     "momo_breakout": momentum_breakout,
     "pullback": pullback,
     "meanrev": mean_reversion,
+    "close_strength": close_strength,
 }
+
+ACTIVE_STRATEGIES: tuple[str, ...] = ("close_strength",)
 
 
 def default_strategies() -> list[StrategySpec]:
-    return [factory() for factory in STRATEGY_FACTORIES.values()]
+    return [STRATEGY_FACTORIES[name]() for name in ACTIVE_STRATEGIES]

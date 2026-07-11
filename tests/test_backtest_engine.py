@@ -234,6 +234,83 @@ def test_open_at_min_open_fills():
     assert result.stats.open_positions == 1
 
 
+def test_close_buy_fills_same_day_and_exits_next_open():
+    panel = build_panel(
+        [
+            bar(d(0), "AAA", 100),
+            bar(d(1), "AAA", 100, close=104),
+            bar(d(2), "AAA", 107, close=103),
+            bar(d(3), "AAA", 103),
+        ]
+    )
+    strategy = ScriptedStrategy(
+        {d(1): [Order("buy", "AAA", budget=1_000_000, fill_at="close", exit_next_open=True)]}
+    )
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    trade = result.trades.row(0, named=True)
+    assert trade["entry_day"] == d(1)
+    assert trade["entry_price"] == pytest.approx(104.0)
+    assert trade["exit_day"] == d(2)
+    assert trade["exit_price"] == pytest.approx(107.0)
+    assert trade["reason"] == "overnight"
+    day1 = result.equity.filter(pl.col("day") == d(1)).row(0, named=True)
+    assert day1["positions"] == 1
+    assert day1["equity"] == pytest.approx(10_000_000.0)
+
+
+def test_close_buy_rejected_on_limit_up_close():
+    panel = build_panel(
+        [bar(d(0), "AAA", 100), bar(d(1), "AAA", 110, close=130), bar(d(2), "AAA", 130)]
+    )
+    strategy = ScriptedStrategy(
+        {d(1): [Order("buy", "AAA", budget=1_000_000, fill_at="close", exit_next_open=True)]}
+    )
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    rejection = result.rejections.row(0, named=True)
+    assert rejection == {"day": d(1), "symbol": "AAA", "kind": "buy", "reason": "limit-up"}
+    assert result.stats.open_positions == 0
+
+
+def test_close_buy_rejected_on_last_bar():
+    rows = flat_series("AAA", range(4))
+    rows += [bar(d(0), "BBB", 100), bar(d(1), "BBB", 100, close=105)]
+    panel = build_panel(rows)
+    strategy = ScriptedStrategy(
+        {d(1): [Order("buy", "BBB", budget=1_000_000, fill_at="close", exit_next_open=True)]}
+    )
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    rejection = result.rejections.row(0, named=True)
+    assert rejection["reason"] == "delist"
+    assert result.stats.open_positions == 0
+
+
+def test_overnight_exit_defers_on_limit_down_open():
+    panel = build_panel(
+        [
+            bar(d(0), "AAA", 100),
+            bar(d(1), "AAA", 100, close=104),
+            bar(d(2), "AAA", 70, close=72),
+            bar(d(3), "AAA", 75, close=76),
+        ]
+    )
+    strategy = ScriptedStrategy(
+        {d(1): [Order("buy", "AAA", budget=1_000_000, fill_at="close", exit_next_open=True)]}
+    )
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    trade = result.trades.row(0, named=True)
+    assert trade["exit_day"] == d(3)
+    assert trade["exit_price"] == pytest.approx(75.0)
+    assert trade["reason"] == "overnight"
+
+
 def test_limit_down_open_blocks_sells_and_stops():
     panel = build_panel(
         [

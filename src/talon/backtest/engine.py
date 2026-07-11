@@ -49,6 +49,8 @@ class Order:
     stop: float | None = None
     target: float | None = None
     min_open: float | None = None
+    fill_at: Literal["open", "close"] = "open"
+    exit_next_open: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,6 +114,7 @@ class _Position:
     stop: float | None
     target: float | None
     last_mark: float
+    exit_next_open: bool = False
 
 
 def _floor_shares(value: float) -> int:
@@ -156,12 +159,25 @@ class _Run:
             self._open_buys(day, bars)
             self._intrabar_exits(day, bars)
             self._delist_closes(day, bars, last_day, global_end)
-            self._mark(day, bars)
+            self._update_marks(bars)
             if day != global_end:
                 view = MarketView(self.panel, day)
-                self.pending = list(self.strategy.decide(view, self._portfolio_view(day)))
+                orders = list(self.strategy.decide(view, self._portfolio_view(day)))
+                close_buys = [
+                    order for order in orders if order.kind == "buy" and order.fill_at == "close"
+                ]
+                self.pending = [
+                    order
+                    for order in orders
+                    if not (order.kind == "buy" and order.fill_at == "close")
+                ]
+                if close_buys:
+                    close_bars = self._day_bars(frame, {order.symbol for order in close_buys})
+                    self._close_buys(day, close_bars, close_buys, last_day)
+                    self._update_marks(close_bars)
             else:
                 self.pending = []
+            self._append_equity(day)
         equity = pl.DataFrame(self.equity_rows, schema=EQUITY_SCHEMA)
         trades = pl.DataFrame(self.trade_rows, schema=TRADES_SCHEMA)
         rejections = pl.DataFrame(self.rejection_rows, schema=REJECTION_SCHEMA)
@@ -223,6 +239,14 @@ class _Run:
             self._close(position, day, bar["open"] * (1 - self.config.slippage_pct), "strategy")
         for symbol in sorted(self.positions):
             position = self.positions[symbol]
+            if not position.exit_next_open:
+                continue
+            bar = bars.get(symbol)
+            if bar is None or self._limit_down(bar):
+                continue
+            self._close(position, day, bar["open"] * (1 - self.config.slippage_pct), "overnight")
+        for symbol in sorted(self.positions):
+            position = self.positions[symbol]
             bar = bars.get(symbol)
             if bar is None or self._limit_down(bar):
                 continue
@@ -249,30 +273,56 @@ class _Run:
             if order.min_open is not None and bar["open"] < order.min_open:
                 self._reject(day, order, "no-confirm")
                 continue
-            exec_adj = bar["open"] * (1 + self.config.slippage_pct)
-            factor = bar["factor"]
-            exec_raw = exec_adj / factor
-            budget_shares = _floor_shares(order.budget / exec_raw)
-            cap_shares = _floor_shares(bar["volume"] * self.config.volume_cap_pct * factor)
-            shares = min(budget_shares, cap_shares, _floor_shares(self.cash / exec_raw))
-            while shares > 0:
-                notional = shares * exec_raw
-                if notional + self.costs.buy_fee(notional, day) <= self.cash + 1e-6:
-                    break
-                shares -= 1
-            if shares <= 0:
-                if cap_shares == 0:
-                    reason = "volume"
-                elif budget_shares == 0:
-                    reason = "budget"
-                else:
-                    reason = "no-cash"
-                self._reject(day, order, reason)
+            self._fill_buy(day, order, bar, bar["open"] * (1 + self.config.slippage_pct))
+
+    def _close_buys(
+        self,
+        day: date,
+        bars: dict[str, dict[str, Any]],
+        orders: list[Order],
+        last_day: dict[str, date],
+    ) -> None:
+        for order in orders:
+            if order.budget is None or order.budget <= 0:
+                self._reject(day, order, "invalid")
                 continue
+            bar = bars.get(order.symbol)
+            if bar is None:
+                self._reject(day, order, "no-bar")
+                continue
+            if last_day.get(order.symbol) == day:
+                self._reject(day, order, "delist")
+                continue
+            prev = bar["prev_close"]
+            if prev is not None and bar["close"] >= prev * (1 + self.config.limit_move_pct):
+                self._reject(day, order, "limit-up")
+                continue
+            self._fill_buy(day, order, bar, bar["close"] * (1 + self.config.slippage_pct))
+
+    def _fill_buy(self, day: date, order: Order, bar: dict[str, Any], exec_adj: float) -> None:
+        factor = bar["factor"]
+        exec_raw = exec_adj / factor
+        budget_shares = _floor_shares((order.budget or 0.0) / exec_raw)
+        cap_shares = _floor_shares(bar["volume"] * self.config.volume_cap_pct * factor)
+        shares = min(budget_shares, cap_shares, _floor_shares(self.cash / exec_raw))
+        while shares > 0:
             notional = shares * exec_raw
-            fee = self.costs.buy_fee(notional, day)
-            self.cash -= notional + fee
-            self._enter(order, day, shares / factor, exec_adj, notional, fee)
+            if notional + self.costs.buy_fee(notional, day) <= self.cash + 1e-6:
+                break
+            shares -= 1
+        if shares <= 0:
+            if cap_shares == 0:
+                reason = "volume"
+            elif budget_shares == 0:
+                reason = "budget"
+            else:
+                reason = "no-cash"
+            self._reject(day, order, reason)
+            return
+        notional = shares * exec_raw
+        fee = self.costs.buy_fee(notional, day)
+        self.cash -= notional + fee
+        self._enter(order, day, shares / factor, exec_adj, notional, fee)
 
     def _enter(
         self,
@@ -295,6 +345,7 @@ class _Run:
                 stop=order.stop,
                 target=order.target,
                 last_mark=exec_adj,
+                exit_next_open=order.exit_next_open,
             )
             return
         total_shares = position.shares_adj + shares_adj
@@ -308,6 +359,7 @@ class _Run:
             position.stop = order.stop
         if order.target is not None:
             position.target = order.target
+        position.exit_next_open = position.exit_next_open or order.exit_next_open
 
     def _intrabar_exits(self, day: date, bars: dict[str, dict[str, Any]]) -> None:
         for symbol in sorted(self.positions):
@@ -373,14 +425,20 @@ class _Run:
                 )
             )
 
-    def _mark(self, day: date, bars: dict[str, dict[str, Any]]) -> None:
-        value = 0.0
+    def _update_marks(self, bars: dict[str, dict[str, Any]]) -> None:
         for symbol in sorted(self.positions):
-            position = self.positions[symbol]
             bar = bars.get(symbol)
             if bar is not None:
-                position.last_mark = bar["close"]
-            value += position.shares_adj * position.last_mark
+                self.positions[symbol].last_mark = bar["close"]
+
+    def _position_value(self) -> float:
+        return sum(
+            self.positions[symbol].shares_adj * self.positions[symbol].last_mark
+            for symbol in sorted(self.positions)
+        )
+
+    def _append_equity(self, day: date) -> None:
+        value = self._position_value()
         self.equity_rows.append(
             {
                 "day": day,
@@ -404,8 +462,12 @@ class _Run:
             )
             for symbol, position in sorted(self.positions.items())
         }
-        equity = self.equity_rows[-1]["equity"] if self.equity_rows else self.cash
-        return PortfolioView(day=day, cash=self.cash, equity=equity, positions=views)
+        return PortfolioView(
+            day=day,
+            cash=self.cash,
+            equity=self.cash + self._position_value(),
+            positions=views,
+        )
 
 
 def run_backtest(

@@ -128,6 +128,24 @@ def test_buy_order_carries_min_open():
     assert result.orders[0].min_open == 10_100.0
 
 
+def test_close_overnight_signal_maps_to_close_fill_order():
+    gate = RiskGate()
+    overnight = Signal(
+        strategy="s1",
+        symbol="AAA",
+        score=0.5,
+        ref_price=10_000.0,
+        stop=9_500.0,
+        target=11_000.0,
+        execution="close_overnight",
+    )
+    result = gate.apply(D0, portfolio(), [overnight], BULL)
+
+    order = result.orders[0]
+    assert order.fill_at == "close"
+    assert order.exit_next_open is True
+
+
 def test_max_positions_blocks_when_full():
     gate = RiskGate()
     held = [position(s, 100_000.0) for s in ("P1", "P2", "P3", "P4", "P5")]

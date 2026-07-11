@@ -3,7 +3,13 @@ from datetime import date, timedelta
 import polars as pl
 
 from talon.factors.engine import compute_factors
-from talon.quant.strategies import mean_reversion, momentum_breakout, pullback
+from talon.quant.strategies import (
+    close_strength,
+    default_strategies,
+    mean_reversion,
+    momentum_breakout,
+    pullback,
+)
 
 BASE = date(2026, 1, 5)
 
@@ -108,6 +114,37 @@ def test_mean_reversion_fires_on_oversold_dip_in_uptrend():
     with_bounce = build_panel([*rows, bar(31, "AAA", 106.0, open_=103.0, high=106.0, low=103.0)])
     bounced = augment(with_bounce, spec).filter(pl.col("day") == d(31))
     assert spec.wants_exit(bounced, "AAA") is True
+
+
+def test_close_strength_fires_on_high_close_with_volume():
+    spec = close_strength(strength_pct=3.0, volume_surge=2.0, min_value=0.0)
+    rows = [bar(i, "AAA", 100.0) for i in range(1, 25)]
+    rows.append(bar(25, "AAA", 106.0, open_=101.0, high=106.0, low=100.0, volume=5000.0))
+    rows.append(bar(26, "AAA", 105.0, open_=104.0, high=106.0, low=103.0, volume=5000.0))
+    frame = augment(build_panel(rows), spec)
+
+    fired = candidates_on(frame, spec, d(25))
+    off_high = candidates_on(frame, spec, d(26))
+
+    assert [c.symbol for c in fired] == ["AAA"]
+    candidate = fired[0]
+    assert candidate.execution == "close_overnight"
+    assert candidate.score > 0
+    assert candidate.stop < 106.0 < candidate.target
+    assert off_high == []
+
+
+def test_close_strength_skips_limit_up_close():
+    spec = close_strength(strength_pct=3.0, volume_surge=2.0, min_value=0.0)
+    rows = [bar(i, "AAA", 100.0) for i in range(1, 25)]
+    rows.append(bar(25, "AAA", 130.0, open_=110.0, high=130.0, low=110.0, volume=5000.0))
+    frame = augment(build_panel(rows), spec)
+
+    assert candidates_on(frame, spec, d(25)) == []
+
+
+def test_default_book_is_close_strength_only():
+    assert [spec.name for spec in default_strategies()] == ["close_strength"]
 
 
 def test_liquidity_floor_excludes_thin_names():

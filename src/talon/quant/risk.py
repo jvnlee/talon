@@ -226,6 +226,7 @@ class RiskGate:
                     continue
                 budget = room
                 self._log_signal(day, signal, "trim", "exposure-cap")
+            overnight = signal.execution == "close_overnight"
             orders.append(
                 Order(
                     "buy",
@@ -234,6 +235,8 @@ class RiskGate:
                     stop=signal.stop,
                     target=signal.target,
                     min_open=signal.min_open,
+                    fill_at="close" if overnight else "open",
+                    exit_next_open=overnight,
                 )
             )
             approved.append(signal)

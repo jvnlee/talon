@@ -24,6 +24,14 @@ def test_spec_validation():
         spec(entry=())
     with pytest.raises(ValueError, match="보유일"):
         spec(max_hold_days=0)
+    with pytest.raises(ValueError, match="실행 모드"):
+        spec(execution="intraday")
+
+
+def test_candidates_carry_execution():
+    assert spec().candidates(day_frame())[0].execution == "open"
+    overnight = spec(execution="close_overnight").candidates(day_frame())[0]
+    assert overnight.execution == "close_overnight"
 
 
 def test_columns_are_prefixed_and_score_is_ranked():
