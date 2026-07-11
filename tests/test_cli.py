@@ -95,6 +95,102 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
     assert report.exists()
 
 
+def test_evaluate_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
+    import json
+    from datetime import date, timedelta
+
+    import polars as pl
+
+    from talon.data.store import INDEX_DAILY
+    from talon.sources.fdr_daily import HISTORY_SCHEMA
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    _write_flat_daily(snapshots, series)
+    days = [date(2026, 1, 5) + timedelta(days=i) for i in range(6)]
+    series.replace(
+        INDEX_DAILY,
+        "KOSPI",
+        pl.DataFrame(
+            {
+                "day": days,
+                "open": [100.0] * 6,
+                "high": [100.0] * 6,
+                "low": [100.0] * 6,
+                "close": [100.0] * 6,
+                "volume": [1.0] * 6,
+            },
+            schema=HISTORY_SCHEMA,
+        ),
+    )
+
+    runner = CliRunner()
+    out_dir = tmp_path / "gate1"
+    result = runner.invoke(main, ["evaluate", "--oos-start", "2026-01-08", "--out", str(out_dir)])
+
+    assert result.exit_code == 1, result.output
+    report = json.loads(result.output.splitlines()[0])
+    assert report["oos_start"] == "2026-01-08"
+    assert report["passed"] is False
+    assert {check["name"] for check in report["checks"]} == {
+        "coverage",
+        "oos-vs-kospi",
+        "mdd",
+        "trades",
+        "profit-factor",
+    }
+    assert "관문 1: 미통과" in result.output
+    for name in ("report.json", "is_equity.parquet", "oos_trades.parquet"):
+        assert (out_dir / name).exists()
+
+
+def test_evaluate_requires_index_data(tmp_path, monkeypatch, cfg, snapshots, series):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    _write_flat_daily(snapshots, series)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["evaluate", "--oos-start", "2026-01-08"])
+
+    assert result.exit_code == 1
+    assert "index backfill" in result.output
+
+
+def test_index_backfill_smoke(tmp_path, monkeypatch, cfg):
+    import json
+    from datetime import date
+
+    import polars as pl
+
+    from talon.sources.fdr_daily import HISTORY_SCHEMA
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+
+    def fake_history(code, start, end):
+        return pl.DataFrame(
+            {
+                "day": [date(2026, 7, 10)],
+                "open": [100.0],
+                "high": [100.0],
+                "low": [100.0],
+                "close": [100.0],
+                "volume": [1.0],
+            },
+            schema=HISTORY_SCHEMA,
+        )
+
+    monkeypatch.setattr("talon.ingest.index.fetch_symbol_history", fake_history)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["index", "backfill", "--symbol", "KOSPI"])
+
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output.splitlines()[0])
+    assert summary["status"] == "ok"
+    assert summary["rows"] == {"KOSPI": 1}
+
+
 def test_lookahead_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
     import json
 

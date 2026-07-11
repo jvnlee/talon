@@ -13,9 +13,11 @@ import polars as pl
 
 from talon import __version__
 from talon import launchd as launchd_mod
+from talon.backtest.benchmark import load_index_daily
 from talon.backtest.crosscheck import run_crosscheck
 from talon.backtest.data import PANEL_COLUMNS, load_panel
 from talon.backtest.engine import EngineConfig, run_backtest
+from talon.backtest.evaluate import evaluate_gate1
 from talon.backtest.lookahead import pick_cuts, verify_factors, verify_replay
 from talon.backtest.report import write_tearsheet
 from talon.config import TalonSettings, load_settings
@@ -40,6 +42,7 @@ from talon.notify.telegram import Alerter, TelegramNotifier
 from talon.quant.core import QuantCore
 from talon.quant.regime import BreadthRegimeFilter
 from talon.quant.risk import interventions_frame
+from talon.quant.signals import StrategySpec
 from talon.quant.strategies import default_strategies
 from talon.sources.toss import TossClient
 from talon.timeutil import KST, now_utc
@@ -193,6 +196,22 @@ def backfill_daily_command(years: int | None, start_text: str | None, end_text: 
     click.echo(summary.model_dump_json())
 
 
+def _warmup_start(
+    start: date | None,
+    strategies: list[StrategySpec],
+    regime_filter: BreadthRegimeFilter,
+) -> date | None:
+    if start is None:
+        return None
+    columns: dict[str, str] = {}
+    for spec in strategies:
+        columns.update(spec.columns())
+    columns.update(regime_filter.columns())
+    feature_columns = set(PANEL_COLUMNS) - {"day", "symbol"}
+    warmup = max(warmup_periods(columns, feature_columns).values(), default=0)
+    return start - timedelta(days=int(warmup * 1.7) + 10)
+
+
 @main.command()
 @click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
 @click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
@@ -213,13 +232,7 @@ def backtest(
     end = date.fromisoformat(end_text) if end_text else None
     strategies = default_strategies()
     regime_filter = BreadthRegimeFilter()
-    columns: dict[str, str] = {}
-    for spec in strategies:
-        columns.update(spec.columns())
-    columns.update(regime_filter.columns())
-    feature_columns = set(PANEL_COLUMNS) - {"day", "symbol"}
-    warmup = max(warmup_periods(columns, feature_columns).values(), default=0)
-    load_start = start - timedelta(days=int(warmup * 1.7) + 10) if start else None
+    load_start = _warmup_start(start, strategies, regime_filter)
     with runtime(cfg, toss="skip") as rt:
         panel = load_panel(
             rt.snapshots,
@@ -251,6 +264,68 @@ def backtest(
         except TalonError as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(str(report_path))
+
+
+@main.command()
+@click.option("--oos-start", "oos_start_text", required=True, help="YYYY-MM-DD")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--symbol", "symbols", multiple=True)
+@click.option("--cash", type=float, default=10_000_000.0, show_default=True)
+@click.option("--out", "out_dir", type=click.Path(path_type=Path), default=None)
+def evaluate(
+    oos_start_text: str,
+    start_text: str | None,
+    end_text: str | None,
+    symbols: tuple[str, ...],
+    cash: float,
+    out_dir: Path | None,
+) -> None:
+    cfg = load_settings()
+    oos_start = date.fromisoformat(oos_start_text)
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    strategies = default_strategies()
+    regime_filter = BreadthRegimeFilter()
+    load_start = _warmup_start(start, strategies, regime_filter)
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=load_start,
+            end=end,
+            symbols=list(symbols) or None,
+        )
+        try:
+            kospi = load_index_daily(rt.series, "KOSPI")
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+    try:
+        evaluation = evaluate_gate1(
+            panel,
+            make_core=lambda p: QuantCore(p, strategies=strategies, regime_filter=regime_filter),
+            benchmark_daily=kospi,
+            oos_start=oos_start,
+            trading_start=start,
+            config=EngineConfig(initial_cash=cash),
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    report = evaluation.report
+    click.echo(report.model_dump_json())
+    for check in report.checks:
+        click.echo(f"{'✓' if check.passed else '✗'} {check.name}: {check.detail}")
+    click.echo(f"관문 1: {'통과' if report.passed else '미통과'}")
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "report.json").write_text(report.model_dump_json(indent=2))
+        for label, result in (("is", evaluation.in_sample), ("oos", evaluation.out_of_sample)):
+            result.equity.write_parquet(out_dir / f"{label}_equity.parquet")
+            result.trades.write_parquet(out_dir / f"{label}_trades.parquet")
+            result.rejections.write_parquet(out_dir / f"{label}_rejections.parquet")
+        click.echo(str(out_dir))
+    if not report.passed:
+        sys.exit(1)
 
 
 @main.command()
@@ -377,7 +452,8 @@ def universe_show() -> None:
 def status() -> None:
     cfg = load_settings()
     with runtime(cfg, toss="skip") as rt:
-        for job in ("collect", "eod", "watchdog", "backfill-daily", "adjust-build"):
+        jobs = ("collect", "eod", "watchdog", "backfill-daily", "adjust-build", "index-backfill")
+        for job in jobs:
             heartbeat = rt.state.get_heartbeat(job)
             runs = rt.state.recent_runs(job, limit=1)
             beat_text = (
@@ -438,6 +514,49 @@ def adjust_build(force: bool, symbols: tuple[str, ...], throttle: float) -> None
                 progress=report,
             )
     click.echo(summary.model_dump_json())
+
+
+@main.group()
+def index() -> None:
+    pass
+
+
+@index.command("backfill")
+@click.option("--years", type=int, default=None)
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--symbol", "symbols", multiple=True)
+def index_backfill(
+    years: int | None,
+    start_text: str | None,
+    end_text: str | None,
+    symbols: tuple[str, ...],
+) -> None:
+    from talon.ingest.index import backfill_index
+
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        end = (
+            date.fromisoformat(end_text) if end_text else rt.cal.previous_trading_day(_today_kst())
+        )
+        if start_text:
+            start = date.fromisoformat(start_text)
+        else:
+            span_years = years if years is not None else cfg.backfill_years
+            start = end - timedelta(days=round(365.25 * span_years))
+        try:
+            summary = backfill_index(
+                state=rt.state,
+                series=rt.series,
+                start=start,
+                end=end,
+                symbols=list(symbols) or None,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+    click.echo(summary.model_dump_json())
+    if summary.status == "error":
+        sys.exit(1)
 
 
 @main.group()
