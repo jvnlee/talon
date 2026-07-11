@@ -16,13 +16,14 @@ from talon.backtest.engine import (
     PortfolioView,
     run_backtest,
 )
-from talon.backtest.metrics import BacktestStats
+from talon.backtest.metrics import BacktestStats, DeflatedSharpe, deflated_sharpe
 
 MIN_TOTAL_YEARS = 10.0
 MIN_OOS_YEARS = 2.0
 MAX_MDD_PCT = 20.0
 MIN_TRADES = 200
 MIN_PROFIT_FACTOR = 1.3
+MIN_TRIALS_FOR_DSR = 2
 
 
 class GateState(Protocol):
@@ -69,6 +70,7 @@ class Gate1Report(BaseModel):
     end: date
     in_sample: WindowReport
     out_of_sample: WindowReport
+    deflated: DeflatedSharpe | None = None
     checks: list[GateCheck]
     passed: bool
 
@@ -195,6 +197,33 @@ def _build_checks(
     return checks
 
 
+def _deflated_check(deflated: DeflatedSharpe | None, trial_count: int) -> GateCheck:
+    if trial_count < MIN_TRIALS_FOR_DSR:
+        return GateCheck(
+            name="deflated-sharpe",
+            passed=False,
+            detail=(
+                f"튜닝 시도 기록 부족: {trial_count}회 "
+                f"(최소 {MIN_TRIALS_FOR_DSR}회, talon backtest 실행이 기록됨)"
+            ),
+        )
+    if deflated is None:
+        return GateCheck(
+            name="deflated-sharpe",
+            passed=False,
+            detail="IS 수익률 분포로 Deflated Sharpe를 계산할 수 없습니다",
+        )
+    return GateCheck(
+        name="deflated-sharpe",
+        passed=deflated.margin > 0,
+        detail=(
+            f"IS 일간 Sharpe {deflated.sharpe_daily:.4f} vs "
+            f"기대 최대 {deflated.expected_max_daily:.4f} "
+            f"(시도 {deflated.trials}회, 확률 {deflated.probability:.2f})"
+        ),
+    )
+
+
 def evaluate_gate1(
     panel: pl.DataFrame,
     *,
@@ -203,6 +232,7 @@ def evaluate_gate1(
     oos_start: date,
     trading_start: date | None = None,
     config: EngineConfig | None = None,
+    trial_sharpes: Sequence[float] | None = None,
 ) -> Gate1Evaluation:
     if panel.is_empty():
         raise ValueError("빈 패널로는 관문 평가를 실행할 수 없습니다")
@@ -235,12 +265,20 @@ def evaluate_gate1(
         engine_config,
     )
     checks = _build_checks(start, oos_start, end, in_sample, out_of_sample)
+    sharpes = list(trial_sharpes) if trial_sharpes is not None else []
+    deflated = (
+        deflated_sharpe(is_result.equity["equity"], engine_config.initial_cash, sharpes)
+        if len(sharpes) >= MIN_TRIALS_FOR_DSR
+        else None
+    )
+    checks.append(_deflated_check(deflated, len(sharpes)))
     report = Gate1Report(
         trading_start=start,
         oos_start=oos_start,
         end=end,
         in_sample=in_sample,
         out_of_sample=out_of_sample,
+        deflated=deflated,
         checks=checks,
         passed=all(check.passed for check in checks),
     )

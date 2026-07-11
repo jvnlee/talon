@@ -55,3 +55,31 @@ def test_universe_snapshots(state):
 
     state.save_universe(date(2026, 7, 10), ["005930"], {"size": 1})
     assert state.latest_universe().symbols == ["005930"]
+
+
+def test_trials_roundtrip(state):
+    assert state.trial_count() == 0
+    assert state.trial_sharpes() == []
+
+    first = state.record_trial(
+        start=date(2016, 7, 11),
+        end=date(2023, 6, 30),
+        symbols=[],
+        strategies=["momo_breakout", "pullback", "meanrev"],
+        sharpe_daily=0.05,
+        trades=120,
+        total_return_pct=42.5,
+    )
+    second = state.record_trial(
+        start=None,
+        end=None,
+        symbols=["005930"],
+        strategies=["pullback"],
+        sharpe_daily=None,
+        trades=0,
+        total_return_pct=None,
+    )
+
+    assert second == first + 1
+    assert state.trial_count() == 2
+    assert state.trial_sharpes() == [0.05]

@@ -79,6 +79,7 @@ def test_evaluate_splits_windows_and_compares_benchmark():
         benchmark_daily=benchmark,
         oos_start=d(20),
         trading_start=d(0),
+        trial_sharpes=[0.1, 0.2],
     )
     report = evaluation.report
 
@@ -111,8 +112,30 @@ def test_evaluate_splits_windows_and_compares_benchmark():
     assert checks["profit-factor"].passed
     assert report.passed is False
 
+    assert report.deflated is not None
+    assert report.deflated.trials == 2
+    assert "deflated-sharpe" in checks
+
     assert evaluation.in_sample.trades.height == 1
     assert evaluation.out_of_sample.trades.height == 1
+
+
+def test_evaluate_fails_deflated_check_without_trial_history():
+    panel = build_panel([bar(d(i), "AAA", 100.0 + i) for i in range(10)])
+    benchmark = flat_benchmark([d(i) for i in range(10)])
+
+    evaluation = evaluate_gate1(
+        panel,
+        make_core=lambda p: FakeCore({}),
+        benchmark_daily=benchmark,
+        oos_start=d(6),
+    )
+
+    report = evaluation.report
+    assert report.deflated is None
+    checks = {check.name: check for check in report.checks}
+    assert not checks["deflated-sharpe"].passed
+    assert "시도 기록 부족" in checks["deflated-sharpe"].detail
 
 
 def test_evaluate_rejects_oos_start_outside_range():

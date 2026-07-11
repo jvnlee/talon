@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS universe_snapshots (
     criteria TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    start_day TEXT,
+    end_day TEXT,
+    symbols TEXT NOT NULL DEFAULT '[]',
+    strategies TEXT NOT NULL DEFAULT '[]',
+    sharpe_daily REAL,
+    trades INTEGER NOT NULL DEFAULT 0,
+    total_return_pct REAL
+);
 """
 
 
@@ -127,6 +138,44 @@ class StateDB:
             "ON CONFLICT(key) DO UPDATE SET last_sent_at=excluded.last_sent_at",
             (key, now_utc().isoformat()),
         )
+
+    def record_trial(
+        self,
+        *,
+        start: date | None,
+        end: date | None,
+        symbols: list[str],
+        strategies: list[str],
+        sharpe_daily: float | None,
+        trades: int,
+        total_return_pct: float | None,
+    ) -> int:
+        cursor = self._conn.execute(
+            "INSERT INTO trials "
+            "(ts, start_day, end_day, symbols, strategies, sharpe_daily, trades, total_return_pct) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                now_utc().isoformat(),
+                start.isoformat() if start else None,
+                end.isoformat() if end else None,
+                json.dumps(symbols),
+                json.dumps(strategies),
+                sharpe_daily,
+                trades,
+                total_return_pct,
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+    def trial_count(self) -> int:
+        row = self._conn.execute("SELECT COUNT(*) FROM trials").fetchone()
+        return int(row[0])
+
+    def trial_sharpes(self) -> list[float]:
+        rows = self._conn.execute(
+            "SELECT sharpe_daily FROM trials WHERE sharpe_daily IS NOT NULL ORDER BY id"
+        ).fetchall()
+        return [float(row[0]) for row in rows]
 
     def save_universe(self, day: date, symbols: list[str], criteria: dict[str, Any]) -> None:
         self._conn.execute(

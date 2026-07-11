@@ -19,6 +19,7 @@ from talon.backtest.data import PANEL_COLUMNS, load_panel
 from talon.backtest.engine import EngineConfig, run_backtest
 from talon.backtest.evaluate import evaluate_gate1
 from talon.backtest.lookahead import pick_cuts, verify_factors, verify_replay
+from talon.backtest.metrics import TRADING_DAYS_PER_YEAR
 from talon.backtest.report import write_tearsheet
 from talon.config import TalonSettings, load_settings
 from talon.data.state import StateDB
@@ -247,9 +248,24 @@ def backtest(
         result = run_backtest(trading_panel, core, config=EngineConfig(initial_cash=cash))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo(result.stats.model_dump_json())
+    stats = result.stats
+    with StateDB(cfg.state_path) as state:
+        trial_id = state.record_trial(
+            start=stats.start,
+            end=stats.end,
+            symbols=sorted(symbols),
+            strategies=[spec.name for spec in strategies],
+            sharpe_daily=(
+                stats.sharpe / TRADING_DAYS_PER_YEAR**0.5 if stats.sharpe is not None else None
+            ),
+            trades=stats.trades,
+            total_return_pct=stats.total_return_pct,
+        )
+    click.echo(stats.model_dump_json())
     actions = Counter(intervention.action for intervention in core.interventions)
-    click.echo(json.dumps({"halted": core.gate.halted, "interventions": dict(actions)}))
+    click.echo(
+        json.dumps({"halted": core.gate.halted, "interventions": dict(actions), "trial": trial_id})
+    )
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
         result.equity.write_parquet(out_dir / "equity.parquet")
@@ -300,6 +316,7 @@ def evaluate(
             kospi = load_index_daily(rt.series, "KOSPI")
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
+        trial_sharpes = rt.state.trial_sharpes()
     try:
         evaluation = evaluate_gate1(
             panel,
@@ -308,6 +325,7 @@ def evaluate(
             oos_start=oos_start,
             trading_start=start,
             config=EngineConfig(initial_cash=cash),
+            trial_sharpes=trial_sharpes,
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc

@@ -90,9 +90,17 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
     stats = json.loads(result.output.splitlines()[0])
     assert stats["initial_cash"] == 10_000_000.0
     assert stats["trades"] == 0
+    gate_line = json.loads(result.output.splitlines()[1])
+    assert gate_line["trial"] == 1
     for name in ("equity", "trades", "rejections", "interventions"):
         assert (out_dir / f"{name}.parquet").exists()
     assert report.exists()
+
+    from talon.data.state import StateDB
+
+    with StateDB(cfg.state_path) as state:
+        assert state.trial_count() == 1
+        assert state.trial_sharpes() == []
 
 
 def test_evaluate_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
@@ -138,6 +146,7 @@ def test_evaluate_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
         "mdd",
         "trades",
         "profit-factor",
+        "deflated-sharpe",
     }
     assert "관문 1: 미통과" in result.output
     for name in ("report.json", "is_equity.parquet", "oos_trades.parquet"):
