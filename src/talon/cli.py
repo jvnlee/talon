@@ -221,7 +221,7 @@ def universe_show() -> None:
 def status() -> None:
     cfg = load_settings()
     with runtime(cfg, toss="skip") as rt:
-        for job in ("collect", "eod", "watchdog", "backfill-daily"):
+        for job in ("collect", "eod", "watchdog", "backfill-daily", "adjust-build"):
             heartbeat = rt.state.get_heartbeat(job)
             runs = rt.state.recent_runs(job, limit=1)
             beat_text = (
@@ -246,6 +246,42 @@ def status() -> None:
             click.echo(f"유니버스: {snapshot.day} 기준 {len(snapshot.symbols)}종목")
         else:
             click.echo("유니버스: 없음")
+
+
+@main.group()
+def adjust() -> None:
+    pass
+
+
+@adjust.command("build")
+@click.option("--force", is_flag=True)
+@click.option("--symbol", "symbols", multiple=True)
+@click.option("--throttle", type=float, default=0.2, show_default=True)
+def adjust_build(force: bool, symbols: tuple[str, ...], throttle: float) -> None:
+    from talon.ingest.factors import build_factors
+
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "adjust.lock") as acquired:
+        if not acquired:
+            click.echo("adjust build가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+
+            def report(index: int, total: int, symbol: str) -> None:
+                if index % 100 == 0 or index == total:
+                    click.echo(f"{index}/{total} {symbol}")
+
+            summary = build_factors(
+                cfg,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                series=rt.series,
+                symbols=list(symbols) or None,
+                force=force,
+                throttle=throttle,
+                progress=report,
+            )
+    click.echo(summary.model_dump_json())
 
 
 @main.group()

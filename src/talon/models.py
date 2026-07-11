@@ -130,6 +130,15 @@ class BackfillSummary(BaseModel):
     failed: list[str] = []
 
 
+class AdjustSummary(BaseModel):
+    status: str
+    symbols: int = 0
+    computed: int = 0
+    skipped: int = 0
+    empty: list[str] = []
+    failed: list[str] = []
+
+
 class WatchdogSummary(BaseModel):
     status: str
     issues: list[str] = []

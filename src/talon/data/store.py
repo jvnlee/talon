@@ -13,6 +13,8 @@ INDICATOR_MINUTE = "indicators_1m"
 INDICATOR_DAILY = "indicators_1d"
 INVESTOR_TRADING = "investor_trading"
 DELISTING = "delisting"
+ADJUST_FACTORS = "adjust_factors"
+ADJUST_MANIFEST = "adjust_manifest"
 
 CANDLE_SCHEMA: dict[str, pl.DataType] = {
     "ts": pl.Datetime("us", "UTC"),
@@ -145,6 +147,12 @@ class DatePartitionedStore:
         if not directory.exists():
             return []
         return sorted(date.fromisoformat(p.stem) for p in directory.glob("*.parquet"))
+
+    def scan(self, dataset: str) -> pl.LazyFrame | None:
+        directory = self.root / dataset
+        if not directory.exists() or not any(directory.glob("*.parquet")):
+            return None
+        return pl.scan_parquet(directory / "*.parquet")
 
     def latest(self, dataset: str) -> tuple[date, pl.DataFrame] | None:
         dates = self.dates(dataset)
