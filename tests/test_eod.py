@@ -111,12 +111,12 @@ def _blocked_listing(day):
 
 @pytest.fixture
 def sources(monkeypatch):
-    monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", lambda day: ohlcv_frame())
-    monkeypatch.setattr("talon.ingest.eod.fetch_market_cap", lambda day: caps_frame())
+    monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", lambda day, **kw: ohlcv_frame())
+    monkeypatch.setattr("talon.ingest.eod.fetch_market_cap", lambda day, **kw: caps_frame())
     monkeypatch.setattr("talon.ingest.eod.fetch_krx_listing", _blocked_listing)
     monkeypatch.setattr(
         "talon.ingest.eod.crosscheck_daily",
-        lambda snapshot, day, sample, tolerance_pct: CrosscheckResult(checked=len(sample)),
+        lambda snapshot, day, sample, **kw: CrosscheckResult(checked=len(sample)),
     )
     monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
 
@@ -164,7 +164,7 @@ def test_eod_skips_holiday(cfg, cal, state, snapshots, series, alerter, sources)
 def test_eod_data_not_ready(cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch):
     monkeypatch.setattr(
         "talon.ingest.eod.fetch_daily_ohlcv",
-        lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
+        lambda day, **kw: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
     )
     monkeypatch.setattr("talon.ingest.eod.fetch_krx_listing", _blocked_listing)
     summary = run(cfg, cal, state, snapshots, series, alerter)
@@ -175,7 +175,7 @@ def test_eod_data_not_ready(cfg, cal, state, snapshots, series, alerter, notifie
 
 
 def test_eod_all_sources_down(cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch):
-    def boom(day):
+    def boom(day, **kw):
         raise SourceError("krx down")
 
     monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", boom)
@@ -188,7 +188,7 @@ def test_eod_all_sources_down(cfg, cal, state, snapshots, series, alerter, notif
 
 
 def test_eod_unexpected_error(cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch):
-    def boom(day):
+    def boom(day, **kw):
         raise RuntimeError("bug")
 
     monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", boom)
@@ -198,11 +198,48 @@ def test_eod_unexpected_error(cfg, cal, state, snapshots, series, alerter, notif
     assert state.recent_runs("eod")[0].ok is False
 
 
+def test_eod_passes_krx_login_to_pykrx(cfg, cal, state, snapshots, series, alerter, monkeypatch):
+    seen = {}
+
+    def capture(day, *, credentials=None, **kw):
+        seen["credentials"] = credentials
+        return ohlcv_frame()
+
+    monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", capture)
+    monkeypatch.setattr("talon.ingest.eod.fetch_market_cap", lambda day, **kw: caps_frame())
+    monkeypatch.setattr(
+        "talon.ingest.eod.crosscheck_daily",
+        lambda snapshot, day, sample, **kw: CrosscheckResult(checked=len(sample)),
+    )
+    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    cfg = cfg.model_copy(update={"krx_id": "tester", "krx_password": "secret"})
+
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.status == "ok"
+    assert "pykrx" in summary.steps["daily"]
+    assert seen["credentials"] == ("tester", "secret")
+
+
+def test_eod_crosscheck_skips_volume_before_settlement(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    seen = {}
+
+    def capture(snapshot, day, sample, *, tolerance_pct, fields, **kw):
+        seen["fields"] = fields
+        return CrosscheckResult(checked=len(sample))
+
+    monkeypatch.setattr("talon.ingest.eod.crosscheck_daily", capture)
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.status == "ok"
+    assert seen["fields"] == ("close",)
+
+
 @pytest.fixture
 def listing_only(monkeypatch):
     monkeypatch.setattr(
         "talon.ingest.eod.fetch_daily_ohlcv",
-        lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
+        lambda day, **kw: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
     )
     monkeypatch.setattr(
         "talon.ingest.eod.fetch_krx_listing", lambda day: (ohlcv_frame(), caps_frame())
@@ -265,7 +302,7 @@ def test_eod_crosscheck_mismatch_alerts(
     )
     monkeypatch.setattr(
         "talon.ingest.eod.crosscheck_daily",
-        lambda snapshot, day, sample, tolerance_pct: result,
+        lambda snapshot, day, sample, **kw: result,
     )
     summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
     assert summary.status == "ok"
@@ -282,7 +319,7 @@ def test_eod_without_toss_degrades_steps(cfg, cal, state, snapshots, series, ale
 def test_eod_marketcap_failure_falls_back(
     cfg, cal, state, snapshots, series, alerter, notifier, sources, monkeypatch
 ):
-    def boom(day):
+    def boom(day, **kw):
         raise SourceError("cap down")
 
     monkeypatch.setattr("talon.ingest.eod.fetch_market_cap", boom)

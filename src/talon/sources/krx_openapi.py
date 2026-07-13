@@ -1,0 +1,149 @@
+import logging
+import time
+from collections.abc import Callable
+from datetime import date
+from typing import Any
+
+import httpx
+import polars as pl
+
+from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA
+from talon.errors import SchemaDriftError, SourceError
+
+log = logging.getLogger(__name__)
+
+BASE_URL = "https://data-dbg.krx.co.kr/svc/apis"
+STOCK_ENDPOINTS = ("sto/stk_bydd_trd", "sto/ksq_bydd_trd")
+EARLIEST_DAY = date(2010, 1, 4)
+
+_REQUIRED_FIELDS = (
+    "ISU_CD",
+    "TDD_OPNPRC",
+    "TDD_HGPRC",
+    "TDD_LWPRC",
+    "TDD_CLSPRC",
+    "ACC_TRDVOL",
+    "ACC_TRDVAL",
+    "MKTCAP",
+    "LIST_SHRS",
+)
+
+_TRADABLE = (pl.col("close") > 0) & (pl.col("high") > 0)
+
+
+def _number(raw: Any) -> float | None:
+    text = str(raw).replace(",", "").strip()
+    if not text or text == "-":
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+class KrxOpenApiSource:
+    def __init__(
+        self,
+        auth_key: str,
+        *,
+        base_url: str = BASE_URL,
+        timeout: float = 30.0,
+        throttle: float = 0.2,
+        transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if not auth_key:
+            raise SourceError("KRX Open API 인증키가 없습니다 (TALON_KRX_API_KEY)")
+        self._throttle = throttle
+        self._sleep = sleep
+        self._http = httpx.Client(
+            base_url=base_url.rstrip("/"),
+            headers={"AUTH_KEY": auth_key},
+            timeout=timeout,
+            transport=transport,
+        )
+
+    def close(self) -> None:
+        self._http.close()
+
+    def rows(self, endpoint: str, day: date) -> list[dict[str, Any]]:
+        try:
+            response = self._http.get(f"/{endpoint}", params={"basDd": day.strftime("%Y%m%d")})
+        except httpx.HTTPError as exc:
+            raise SourceError(f"KRX Open API 요청 실패 ({endpoint}): {exc}") from exc
+        if response.status_code == 401:
+            raise SourceError(
+                f"KRX Open API 인증 거부 ({endpoint}): 인증키가 유효하지 않거나 "
+                "해당 서비스 이용 신청이 승인되지 않았거나 유효기간이 만료되었습니다"
+            )
+        if response.status_code != 200:
+            raise SourceError(
+                f"KRX Open API HTTP {response.status_code} ({endpoint}): {response.text[:200]}"
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise SourceError(f"KRX Open API 응답이 JSON이 아닙니다 ({endpoint})") from exc
+        for value in payload.values():
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+        raise SchemaDriftError(f"KRX Open API 응답에 레코드 배열이 없습니다 ({endpoint})")
+
+    def fetch(self, day: date) -> list[dict[str, Any]]:
+        if day < EARLIEST_DAY:
+            raise SourceError(f"KRX Open API는 {EARLIEST_DAY}부터 제공됩니다 (요청: {day})")
+        records: list[dict[str, Any]] = []
+        for index, endpoint in enumerate(STOCK_ENDPOINTS):
+            if index and self._throttle:
+                self._sleep(self._throttle)
+            records += self.rows(endpoint, day)
+        if records:
+            missing = sorted(f for f in _REQUIRED_FIELDS if f not in records[0])
+            if missing:
+                raise SchemaDriftError(f"KRX Open API 필드 누락: {missing}")
+        return records
+
+    def snapshot(self, day: date) -> tuple[pl.DataFrame, pl.DataFrame]:
+        rows = self.fetch(day)
+        if not rows:
+            return (
+                pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
+                pl.DataFrame(schema=MARKET_CAP_SCHEMA),
+            )
+        symbols = [str(row["ISU_CD"]) for row in rows]
+        columns = {name: [_number(row[name]) for row in rows] for name in _REQUIRED_FIELDS[1:]}
+        change_pct = [_number(row.get("FLUC_RT")) for row in rows]
+
+        daily = pl.DataFrame(
+            {
+                "day": [day] * len(symbols),
+                "symbol": symbols,
+                "open": columns["TDD_OPNPRC"],
+                "high": columns["TDD_HGPRC"],
+                "low": columns["TDD_LWPRC"],
+                "close": columns["TDD_CLSPRC"],
+                "volume": columns["ACC_TRDVOL"],
+                "value": columns["ACC_TRDVAL"],
+                "change_pct": change_pct,
+            },
+            schema=DAILY_SNAPSHOT_SCHEMA,
+        )
+        caps = pl.DataFrame(
+            {
+                "day": [day] * len(symbols),
+                "symbol": symbols,
+                "close": columns["TDD_CLSPRC"],
+                "cap": columns["MKTCAP"],
+                "volume": columns["ACC_TRDVOL"],
+                "value": columns["ACC_TRDVAL"],
+                "shares": columns["LIST_SHRS"],
+            },
+            schema=MARKET_CAP_SCHEMA,
+        )
+        tradable = daily.filter(_TRADABLE).sort("symbol")
+        return (
+            tradable,
+            caps.join(tradable.select("symbol"), on="symbol", how="semi")
+            .filter(pl.col("cap") > 0)
+            .sort("symbol"),
+        )

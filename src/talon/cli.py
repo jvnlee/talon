@@ -202,6 +202,48 @@ def backfill_daily_command(years: int | None, start_text: str | None, end_text: 
     click.echo(summary.model_dump_json())
 
 
+@main.command()
+@click.option("--days", type=int, default=None, help="되돌아볼 거래일 수")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def reconcile(days: int | None, start_text: str | None, end_text: str | None) -> None:
+    """저장된 일봉을 KRX 공식 확정본(Open API)과 대조해 교정한다."""
+    from talon.ingest.reconcile import reconcile_daily
+
+    cfg = load_settings()
+    if not cfg.krx_openapi_configured:
+        raise click.ClickException("TALON_KRX_API_KEY 설정이 필요합니다")
+    with job_lock(cfg.locks_dir / "reconcile.lock") as acquired:
+        if not acquired:
+            click.echo("reconcile이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if start_text:
+                start = date.fromisoformat(start_text)
+            else:
+                lookback = days if days is not None else cfg.reconcile_lookback_days
+                start = end - timedelta(days=round(lookback * 1.6) + 7)
+                sessions = rt.cal.sessions_between(start, end)
+                start = sessions[-lookback] if len(sessions) > lookback else sessions[0]
+            summary = reconcile_daily(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                alerter=rt.alerter,
+                start=start,
+                end=end,
+            )
+    click.echo(summary.model_dump_json(exclude={"days"}))
+    if summary.status == "error":
+        sys.exit(1)
+
+
 @main.group()
 def dart() -> None:
     """DART 전자공시 수집."""
@@ -295,9 +337,7 @@ def _selected_strategies(strategy_filter: tuple[str, ...]) -> list[StrategySpec]
         raise click.ClickException(
             f"알 수 없는 전략: {unknown} (지원: {sorted(STRATEGY_FACTORIES)})"
         )
-    return [
-        factory() for name, factory in STRATEGY_FACTORIES.items() if name in strategy_filter
-    ]
+    return [factory() for name, factory in STRATEGY_FACTORIES.items() if name in strategy_filter]
 
 
 def _record_trial(
@@ -701,7 +741,15 @@ def universe_show() -> None:
 def status() -> None:
     cfg = load_settings()
     with runtime(cfg, toss="skip") as rt:
-        jobs = ("collect", "eod", "watchdog", "backfill-daily", "adjust-build", "index-backfill")
+        jobs = (
+            "collect",
+            "eod",
+            "reconcile",
+            "watchdog",
+            "backfill-daily",
+            "adjust-build",
+            "index-backfill",
+        )
         for job in jobs:
             heartbeat = rt.state.get_heartbeat(job)
             runs = rt.state.recent_runs(job, limit=1)
@@ -918,6 +966,16 @@ def doctor(live: bool) -> None:
     report(
         "telegram 설정", cfg.telegram_configured, "설정됨" if cfg.telegram_configured else "미설정"
     )
+    report(
+        "KRX 로그인 자격증명",
+        cfg.krx_login_configured,
+        "설정됨" if cfg.krx_login_configured else "미설정 (TALON_KRX_ID / TALON_KRX_PASSWORD)",
+    )
+    report(
+        "KRX Open API 인증키",
+        cfg.krx_openapi_configured,
+        "설정됨" if cfg.krx_openapi_configured else "미설정 (TALON_KRX_API_KEY)",
+    )
 
     cal = krx_calendar()
     today = _today_kst()
@@ -939,14 +997,35 @@ def doctor(live: bool) -> None:
                 report("telegram API", me is not None, str(me.get("username")) if me else "실패")
             finally:
                 notifier.close()
+        day = cal.previous_trading_day(today)
         try:
-            from talon.sources.krx_daily import fetch_daily_ohlcv
+            from talon.sources.krx_daily import KrxCredentials, fetch_daily_ohlcv
 
-            day = cal.previous_trading_day(today)
-            frame = fetch_daily_ohlcv(day)
-            report("pykrx", not frame.is_empty(), f"{day} {frame.height} rows")
+            credentials = (
+                KrxCredentials(cfg.krx_id, cfg.krx_password) if cfg.krx_login_configured else None
+            )
+            frame = fetch_daily_ohlcv(day, credentials=credentials)
+            report("pykrx (KRX 로그인)", not frame.is_empty(), f"{day} {frame.height} rows")
         except Exception as exc:
-            report("pykrx", False, str(exc))
+            report("pykrx (KRX 로그인)", False, str(exc))
+        if cfg.krx_openapi_configured:
+            from talon.sources.krx_openapi import STOCK_ENDPOINTS, KrxOpenApiSource
+
+            source = KrxOpenApiSource(
+                cfg.krx_api_key,
+                base_url=cfg.krx_openapi_base_url,
+                throttle=cfg.krx_openapi_throttle_seconds,
+            )
+            try:
+                for endpoint in STOCK_ENDPOINTS:
+                    label = f"KRX Open API {endpoint.split('/')[-1]}"
+                    try:
+                        rows = source.rows(endpoint, day)
+                        report(label, bool(rows), f"{day} {len(rows)} rows")
+                    except Exception as exc:
+                        report(label, False, str(exc))
+            finally:
+                source.close()
         try:
             from talon.sources.fdr_daily import fetch_symbol_history
 

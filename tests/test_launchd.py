@@ -46,6 +46,16 @@ def test_backfill_plist_runs_daily_catchup():
     assert "StartInterval" not in spec
 
 
+def test_reconcile_plist_runs_before_the_next_session():
+    spec = plistlib.loads(render_plist("reconcile", TALON_BIN, DATA_DIR))
+    assert spec["Label"] == "com.talon.reconcile"
+    assert spec["ProgramArguments"][-1] == "reconcile"
+    entries = spec["StartCalendarInterval"]
+    assert {entry["Weekday"] for entry in entries} == {1, 2, 3, 4, 5}
+    assert {entry["Hour"] for entry in entries} == {9, 13}
+    assert all(entry["Hour"] < 15 for entry in entries)
+
+
 def test_every_job_holds_a_sleep_assertion_while_running():
     for job in JOBS:
         spec = plistlib.loads(render_plist(job, TALON_BIN, DATA_DIR))

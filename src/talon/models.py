@@ -130,6 +130,25 @@ class BackfillSummary(BaseModel):
     failed: list[str] = []
 
 
+class ReconcileDay(BaseModel):
+    day: date
+    status: str
+    rows: int = 0
+    corrections: dict[str, int] = {}
+    added: int = 0
+    detail: str = ""
+
+
+class ReconcileSummary(BaseModel):
+    status: str
+    sessions: int = 0
+    days: list[ReconcileDay] = []
+    filled: list[str] = []
+    corrected: list[str] = []
+    unavailable: list[str] = []
+    errors: list[str] = []
+
+
 class IndexBackfillSummary(BaseModel):
     status: str
     rows: dict[str, int] = {}

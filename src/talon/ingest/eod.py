@@ -24,7 +24,7 @@ from talon.models import EodSummary
 from talon.notify.telegram import Alerter
 from talon.sources.crosscheck import crosscheck_daily
 from talon.sources.fdr_daily import fetch_krx_listing
-from talon.sources.krx_daily import fetch_daily_ohlcv, fetch_market_cap
+from talon.sources.krx_daily import KrxCredentials, fetch_daily_ohlcv, fetch_market_cap
 from talon.sources.toss import TossClient
 from talon.timeutil import KST, now_utc
 
@@ -34,6 +34,10 @@ INVESTOR_SYMBOLS = ("KOSPI", "KOSDAQ")
 SNAPSHOT_SAMPLE = 3
 SNAPSHOT_TOLERANCE = 0.005
 MINUTE_COVERAGE_RATIO = 0.9
+
+# 마감 직후에는 시간외 거래분이 아직 집계 중이라 어느 소스든 거래량이 덜 찬다.
+# 가격만 대조하고, 거래량 정합성은 익일 KRX 공식 확정본을 쓰는 reconcile 잡이 맡는다.
+CROSSCHECK_FIELDS = ("close",)
 
 
 def run_eod(
@@ -129,14 +133,15 @@ def _load_daily_snapshots(
 ) -> tuple[pl.DataFrame, pl.DataFrame | None, str]:
     empty = pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA)
     ohlcv = empty
+    credentials = KrxCredentials(cfg.krx_id, cfg.krx_password) if cfg.krx_login_configured else None
     try:
-        ohlcv = fetch_daily_ohlcv(day)
+        ohlcv = fetch_daily_ohlcv(day, credentials=credentials)
     except SourceError as exc:
         steps["pykrx"] = f"error: {exc}"
     if not ohlcv.is_empty():
         caps: pl.DataFrame | None = None
         try:
-            caps_frame = fetch_market_cap(day)
+            caps_frame = fetch_market_cap(day, credentials=credentials)
             caps = caps_frame if not caps_frame.is_empty() else None
         except SourceError as exc:
             steps["marketcap"] = f"error: {exc}"
@@ -278,7 +283,13 @@ def _run_crosscheck(
     alerter: Alerter,
 ) -> None:
     sample = candidate_symbols(liquidity, cfg.crosscheck_sample_size)
-    result = crosscheck_daily(ohlcv, day, sample, tolerance_pct=cfg.crosscheck_tolerance_pct)
+    result = crosscheck_daily(
+        ohlcv,
+        day,
+        sample,
+        tolerance_pct=cfg.crosscheck_tolerance_pct,
+        fields=CROSSCHECK_FIELDS,
+    )
     steps["crosscheck"] = (
         f"checked {result.checked}, "
         f"mismatch {len(result.discrepancies)}, errors {len(result.errors)}"

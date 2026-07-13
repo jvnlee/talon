@@ -1,8 +1,9 @@
 import logging
+import os
 import time
 from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Any, NamedTuple
 
 import polars as pl
 
@@ -10,6 +11,29 @@ from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA
 from talon.errors import SchemaDriftError, SourceError
 
 log = logging.getLogger(__name__)
+
+KRX_ID_ENV = "KRX_ID"
+KRX_PW_ENV = "KRX_PW"
+
+
+class KrxCredentials(NamedTuple):
+    krx_id: str
+    password: str
+
+
+def _load_pykrx(credentials: "KrxCredentials | None") -> Any:
+    if credentials is not None:
+        os.environ[KRX_ID_ENV] = credentials.krx_id
+        os.environ[KRX_PW_ENV] = credentials.password
+    elif not (os.environ.get(KRX_ID_ENV) and os.environ.get(KRX_PW_ENV)):
+        raise SourceError(
+            "KRX 로그인 정보가 없습니다 (TALON_KRX_ID / TALON_KRX_PASSWORD). "
+            "KRX는 2025-12-27부터 회원제라 로그인 없이는 전종목 스냅샷을 받을 수 없습니다"
+        )
+    from pykrx import stock
+
+    return stock
+
 
 _OHLCV_COLUMNS = {
     "시가": "open",
@@ -76,9 +100,13 @@ def _snapshot_frame(
     return pl.DataFrame(data, schema=schema)
 
 
-def fetch_daily_ohlcv(day: date, *, sleep: Callable[[float], None] = time.sleep) -> pl.DataFrame:
-    from pykrx import stock
-
+def fetch_daily_ohlcv(
+    day: date,
+    *,
+    credentials: KrxCredentials | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> pl.DataFrame:
+    stock = _load_pykrx(credentials)
     pdf = _retry(
         lambda: stock.get_market_ohlcv(day.strftime("%Y%m%d"), market="ALL"),
         sleep=sleep,
@@ -89,9 +117,13 @@ def fetch_daily_ohlcv(day: date, *, sleep: Callable[[float], None] = time.sleep)
     return frame.filter((pl.col("close") > 0) & (pl.col("high") > 0))
 
 
-def fetch_market_cap(day: date, *, sleep: Callable[[float], None] = time.sleep) -> pl.DataFrame:
-    from pykrx import stock
-
+def fetch_market_cap(
+    day: date,
+    *,
+    credentials: KrxCredentials | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> pl.DataFrame:
+    stock = _load_pykrx(credentials)
     pdf = _retry(
         lambda: stock.get_market_cap(day.strftime("%Y%m%d"), market="ALL"),
         sleep=sleep,

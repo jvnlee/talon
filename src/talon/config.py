@@ -42,6 +42,12 @@ class TalonSettings(BaseSettings):
     dart_api_key: str = ""
     dart_throttle_seconds: float = 0.5
 
+    krx_id: str = ""
+    krx_password: str = ""
+    krx_api_key: str = ""
+    krx_openapi_base_url: str = "https://data-dbg.krx.co.kr/svc/apis"
+    krx_openapi_throttle_seconds: float = 0.2
+
     universe_size: int = 300
     universe_min_trading_value: float = 1_000_000_000.0
     pinned_symbols: CsvList = []
@@ -62,6 +68,7 @@ class TalonSettings(BaseSettings):
 
     eod_investor_days: int = 30
     backfill_years: int = 10
+    reconcile_lookback_days: int = 5
 
     @field_validator(
         "pinned_symbols",
@@ -107,6 +114,14 @@ class TalonSettings(BaseSettings):
     @property
     def toss_configured(self) -> bool:
         return bool(self.toss_client_id and self.toss_client_secret)
+
+    @property
+    def krx_login_configured(self) -> bool:
+        return bool(self.krx_id and self.krx_password)
+
+    @property
+    def krx_openapi_configured(self) -> bool:
+        return bool(self.krx_api_key)
 
     @property
     def telegram_configured(self) -> bool:

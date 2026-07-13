@@ -7,7 +7,7 @@ from pathlib import Path
 from talon.errors import TalonError
 
 LABEL_PREFIX = "com.talon."
-JOBS = ("collect", "watchdog", "eod", "backfill")
+JOBS = ("collect", "watchdog", "eod", "backfill", "reconcile")
 JOB_ARGS: dict[str, list[str]] = {"backfill": ["backfill-daily", "--years", "1"]}
 CAFFEINATE = ("/usr/bin/caffeinate", "-s")
 
@@ -46,6 +46,12 @@ def render_plist(job: str, talon_bin: Path, data_dir: Path) -> bytes:
         ]
     elif job == "backfill":
         spec["StartCalendarInterval"] = [{"Hour": 19, "Minute": 0}]
+    elif job == "reconcile":
+        spec["StartCalendarInterval"] = [
+            {"Weekday": weekday, "Hour": hour, "Minute": 0}
+            for weekday in range(1, 6)
+            for hour in (9, 13)
+        ]
     else:
         raise TalonError(f"unknown launchd job: {job}")
     return plistlib.dumps(spec)

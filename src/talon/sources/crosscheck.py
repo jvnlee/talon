@@ -28,12 +28,16 @@ def _relative_diff(a: float, b: float) -> float:
     return abs(a - b) / max(abs(a), abs(b), 1.0)
 
 
+DEFAULT_FIELDS = ("close", "volume")
+
+
 def crosscheck_daily(
     snapshot: pl.DataFrame,
     day: date,
     symbols: list[str],
     *,
     tolerance_pct: float,
+    fields: tuple[str, ...] = DEFAULT_FIELDS,
     fetch_history: Callable[[str, date, date], pl.DataFrame] = fetch_symbol_history,
 ) -> CrosscheckResult:
     result = CrosscheckResult()
@@ -55,7 +59,7 @@ def crosscheck_daily(
         result.checked += 1
         ours = ours_rows.row(0, named=True)
         theirs = theirs_rows.row(0, named=True)
-        for field in ("close", "volume"):
+        for field in fields:
             ours_value = float(ours[field])
             theirs_value = float(theirs[field])
             if _relative_diff(ours_value, theirs_value) > tolerance:
