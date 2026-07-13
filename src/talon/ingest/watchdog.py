@@ -1,10 +1,16 @@
 import logging
+from datetime import date, timedelta
 from datetime import time as dtime
-from datetime import timedelta
 
 from talon.config import TalonSettings
 from talon.data.state import StateDB
-from talon.data.store import DAILY_CANDLES, DatePartitionedStore
+from talon.data.store import (
+    ADJUST_MANIFEST,
+    ADJUST_MANIFEST_NAME,
+    DAILY_CANDLES,
+    DatePartitionedStore,
+    ParquetStore,
+)
 from talon.markets.kr import KrxCalendar, within_session
 from talon.models import WatchdogSummary
 from talon.notify.telegram import Alerter
@@ -13,6 +19,33 @@ from talon.timeutil import KST, now_utc
 log = logging.getLogger(__name__)
 
 EOD_DEADLINE = dtime(17, 30)
+ADJUST_DEADLINE = dtime(21, 0)
+
+
+def _job_in_flight(state: StateDB, job: str) -> bool:
+    runs = state.recent_runs(job, limit=1)
+    return bool(runs) and runs[0].finished_at is None
+
+
+def _factors_behind(
+    snapshots: DatePartitionedStore,
+    series: ParquetStore,
+) -> tuple[date, date | None] | None:
+    """load_panel은 수정계수가 없는 날을 경고만 남기고 조용히 버린다. 계수가 일봉을
+    못 따라가면 백테스트가 말없이 최신 일자를 잃으므로 여기서 잡아야 한다."""
+    daily_days = snapshots.dates(DAILY_CANDLES)
+    if not daily_days:
+        return None
+    manifest = series.read(ADJUST_MANIFEST, ADJUST_MANIFEST_NAME)
+    newest = (
+        manifest["last_factor_day"].max()
+        if manifest is not None and not manifest.is_empty()
+        else None
+    )
+    latest_factor = newest if isinstance(newest, date) else None
+    if latest_factor is not None and latest_factor >= daily_days[-1]:
+        return None
+    return daily_days[-1], latest_factor
 
 
 def run_watchdog(
@@ -21,6 +54,7 @@ def run_watchdog(
     cal: KrxCalendar,
     state: StateDB,
     snapshots: DatePartitionedStore,
+    series: ParquetStore,
     alerter: Alerter,
     now=None,
 ) -> WatchdogSummary:
@@ -54,6 +88,17 @@ def run_watchdog(
     if kst_now.time() >= EOD_DEADLINE and not snapshots.has_date(DAILY_CANDLES, day):
         issues.append("eod-missing")
         alerter.alert("eod-missing", f"{day} 일봉 EOD 스냅샷이 아직 없습니다")
+
+    if kst_now.time() >= ADJUST_DEADLINE and not _job_in_flight(state, "adjust-build"):
+        behind = _factors_behind(snapshots, series)
+        if behind is not None:
+            latest_daily, latest_factor = behind
+            issues.append("factors-stale")
+            alerter.alert(
+                "factors-stale",
+                f"수정계수가 일봉을 못 따라갑니다 (일봉 {latest_daily}, "
+                f"계수 {latest_factor or '없음'}) — 백테스트 패널에서 해당 일자가 조용히 빠집니다",
+            )
 
     state.heartbeat("watchdog", True, {"issues": issues})
     return WatchdogSummary(status="ok" if not issues else "issues", issues=issues)

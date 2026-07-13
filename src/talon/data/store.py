@@ -17,6 +17,7 @@ DELISTING = "delisting"
 DART_FILINGS = "dart_filings"
 ADJUST_FACTORS = "adjust_factors"
 ADJUST_MANIFEST = "adjust_manifest"
+ADJUST_MANIFEST_NAME = "coverage"
 
 CANDLE_SCHEMA: dict[str, pl.DataType] = {
     "ts": pl.Datetime("us", "UTC"),

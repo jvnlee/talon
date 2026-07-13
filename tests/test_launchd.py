@@ -56,6 +56,21 @@ def test_reconcile_plist_runs_before_the_next_session():
     assert all(entry["Hour"] < 15 for entry in entries)
 
 
+def test_adjust_plist_runs_after_eod_and_after_reconcile():
+    spec = plistlib.loads(render_plist("adjust", TALON_BIN, DATA_DIR))
+    assert spec["Label"] == "com.talon.adjust"
+    assert spec["ProgramArguments"][-2:] == ["adjust", "build"]
+    entries = spec["StartCalendarInterval"]
+
+    nightly = [e for e in entries if "Weekday" not in e]
+    assert nightly == [{"Hour": 20, "Minute": 0}]
+
+    catchup = [e for e in entries if "Weekday" in e]
+    assert {e["Weekday"] for e in catchup} == {1, 2, 3, 4, 5}
+    assert {e["Hour"] for e in catchup} == {14}
+    assert all(e["Hour"] < 15 for e in catchup)
+
+
 def test_every_job_holds_a_sleep_assertion_while_running():
     for job in JOBS:
         spec = plistlib.loads(render_plist(job, TALON_BIN, DATA_DIR))

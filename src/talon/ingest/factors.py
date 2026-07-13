@@ -11,19 +11,21 @@ from talon.data.state import StateDB
 from talon.data.store import (
     ADJUST_FACTORS,
     ADJUST_MANIFEST,
+    ADJUST_MANIFEST_NAME,
     DAILY_CANDLES,
     DatePartitionedStore,
     ParquetStore,
 )
 from talon.errors import SchemaDriftError, SourceError
 from talon.models import AdjustSummary
+from talon.notify.telegram import Alerter
 from talon.sources.fdr_daily import fetch_symbol_history
 
 log = logging.getLogger(__name__)
 
 FactorFetcher = Callable[[str, date, date], pl.DataFrame]
 
-MANIFEST_NAME = "coverage"
+MANIFEST_NAME = ADJUST_MANIFEST_NAME
 
 MANIFEST_SCHEMA: dict[str, pl.DataType] = {
     "symbol": pl.Utf8(),
@@ -74,6 +76,7 @@ def build_factors(
     state: StateDB,
     snapshots: DatePartitionedStore,
     series: ParquetStore,
+    alerter: Alerter | None = None,
     fetch: FactorFetcher | None = None,
     symbols: list[str] | None = None,
     force: bool = False,
@@ -139,5 +142,12 @@ def build_factors(
         empty=empty,
         failed=failed,
     )
-    state.finish_job(run_id, status == "ok", summary.model_dump(mode="json"))
+    detail = summary.model_dump(mode="json")
+    state.heartbeat("adjust-build", status == "ok", detail)
+    state.finish_job(run_id, status == "ok", detail)
+    if failed and alerter is not None:
+        alerter.alert(
+            "adjust-failed",
+            f"수정계수 산출 실패 {len(failed)}종목: {', '.join(failed[:5])}",
+        )
     return summary

@@ -7,8 +7,11 @@ from pathlib import Path
 from talon.errors import TalonError
 
 LABEL_PREFIX = "com.talon."
-JOBS = ("collect", "watchdog", "eod", "backfill", "reconcile")
-JOB_ARGS: dict[str, list[str]] = {"backfill": ["backfill-daily", "--years", "1"]}
+JOBS = ("collect", "watchdog", "eod", "backfill", "reconcile", "adjust")
+JOB_ARGS: dict[str, list[str]] = {
+    "backfill": ["backfill-daily", "--years", "1"],
+    "adjust": ["adjust", "build"],
+}
 CAFFEINATE = ("/usr/bin/caffeinate", "-s")
 
 
@@ -51,6 +54,14 @@ def render_plist(job: str, talon_bin: Path, data_dir: Path) -> bytes:
             {"Weekday": weekday, "Hour": hour, "Minute": 0}
             for weekday in range(1, 6)
             for hour in (9, 13)
+        ]
+    elif job == "adjust":
+        # 20:00은 eod(18:30)·backfill(19:00)이 끝난 뒤의 정규 재산출(전종목 ~17분).
+        # 14:00은 reconcile(13:00)이 일봉을 고치거나 채운 날에만 실제로 일하고,
+        # 평소에는 신선도 검사에 걸려 전부 건너뛴다. 종가베팅 판단(15:10) 전에 끝난다.
+        spec["StartCalendarInterval"] = [
+            {"Hour": 20, "Minute": 0},
+            *({"Weekday": weekday, "Hour": 14, "Minute": 0} for weekday in range(1, 6)),
         ]
     else:
         raise TalonError(f"unknown launchd job: {job}")

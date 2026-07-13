@@ -707,6 +707,7 @@ def watchdog() -> None:
             cal=rt.cal,
             state=rt.state,
             snapshots=rt.snapshots,
+            series=rt.series,
             alerter=rt.alerter,
         )
     click.echo(summary.model_dump_json())
@@ -805,6 +806,7 @@ def adjust_build(force: bool, symbols: tuple[str, ...], throttle: float) -> None
                 state=rt.state,
                 snapshots=rt.snapshots,
                 series=rt.series,
+                alerter=rt.alerter,
                 symbols=list(symbols) or None,
                 force=force,
                 throttle=throttle,

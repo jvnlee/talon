@@ -171,7 +171,7 @@ def test_empty_adjusted_is_recorded_and_retried(cfg, state, snapshots, series):
     assert len(fetch.calls) == 2
 
 
-def test_source_error_marks_partial_and_isolates_failure(cfg, state, snapshots, series):
+def test_source_error_marks_partial_and_isolates_failure(cfg, state, snapshots, series, alerter):
     two_symbol_snapshots(snapshots)
     fetch = FakeFetch(
         {
@@ -181,7 +181,13 @@ def test_source_error_marks_partial_and_isolates_failure(cfg, state, snapshots, 
     )
 
     summary = build_factors(
-        cfg, state=state, snapshots=snapshots, series=series, fetch=fetch, throttle=0
+        cfg,
+        state=state,
+        snapshots=snapshots,
+        series=series,
+        alerter=alerter,
+        fetch=fetch,
+        throttle=0,
     )
 
     assert summary.status == "partial"
@@ -192,6 +198,55 @@ def test_source_error_marks_partial_and_isolates_failure(cfg, state, snapshots, 
     manifest = series.read(ADJUST_MANIFEST, MANIFEST_NAME)
     assert manifest.filter(pl.col("symbol") == "SPLIT")["status"][0] == "failed"
     assert state.recent_runs("adjust-build")[0].ok is False
+
+
+def test_failure_alerts_and_records_heartbeat(cfg, state, snapshots, series, alerter, notifier):
+    """무인 스케줄 잡이므로 실패가 조용하면 안 된다."""
+    two_symbol_snapshots(snapshots)
+    fetch = FakeFetch(
+        {
+            "SPLIT": SourceError("naver down"),
+            "FLAT": history([1000, 1010, 1020]),
+        }
+    )
+
+    build_factors(
+        cfg,
+        state=state,
+        snapshots=snapshots,
+        series=series,
+        alerter=alerter,
+        fetch=fetch,
+        throttle=0,
+    )
+
+    assert state.get_heartbeat("adjust-build").ok is False
+    assert any("수정계수 산출 실패" in text for text in notifier.sent)
+
+
+def test_success_records_heartbeat_without_alerting(
+    cfg, state, snapshots, series, alerter, notifier
+):
+    two_symbol_snapshots(snapshots)
+    fetch = FakeFetch(
+        {
+            "SPLIT": history([53_000, 53_000, 53_900]),
+            "FLAT": history([1000, 1010, 1020]),
+        }
+    )
+
+    build_factors(
+        cfg,
+        state=state,
+        snapshots=snapshots,
+        series=series,
+        alerter=alerter,
+        fetch=fetch,
+        throttle=0,
+    )
+
+    assert state.get_heartbeat("adjust-build").ok is True
+    assert notifier.sent == []
 
 
 def test_schema_drift_aborts_run(cfg, state, snapshots, series):
