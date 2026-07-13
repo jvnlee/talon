@@ -35,6 +35,24 @@ def test_sessions_between(cal):
     ]
 
 
+def test_ad_hoc_closure_is_not_a_trading_day(cal):
+    assert cal.is_trading_day(date(2026, 6, 2))
+    assert not cal.is_trading_day(date(2026, 6, 3))
+    assert cal.is_trading_day(date(2026, 6, 4))
+    assert not within_session(cal, utc(2026, 6, 3, 3, 0))
+
+
+def test_ad_hoc_closure_skipped_when_walking_sessions(cal):
+    assert cal.latest_trading_day(date(2026, 6, 3)) == date(2026, 6, 2)
+    assert cal.previous_trading_day(date(2026, 6, 4)) == date(2026, 6, 2)
+    assert cal.sessions_between(date(2026, 6, 1), date(2026, 6, 5)) == [
+        date(2026, 6, 1),
+        date(2026, 6, 2),
+        date(2026, 6, 4),
+        date(2026, 6, 5),
+    ]
+
+
 def test_within_session_bounds(cal):
     pre = timedelta(minutes=5)
     post = timedelta(minutes=20)
