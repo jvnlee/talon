@@ -10,7 +10,7 @@ DATA_DIR = Path("/Users/tester/.talon")
 def test_collect_plist():
     spec = plistlib.loads(render_plist("collect", TALON_BIN, DATA_DIR))
     assert spec["Label"] == "com.talon.collect"
-    assert spec["ProgramArguments"] == [str(TALON_BIN), "collect"]
+    assert spec["ProgramArguments"] == ["/usr/bin/caffeinate", "-s", str(TALON_BIN), "collect"]
     assert spec["StartInterval"] == 300
     assert spec["RunAtLoad"] is True
     assert spec["EnvironmentVariables"] == {"TALON_DATA_DIR": str(DATA_DIR)}
@@ -29,6 +29,27 @@ def test_eod_plist_schedule():
     assert len(entries) == 10
     assert {entry["Weekday"] for entry in entries} == {1, 2, 3, 4, 5}
     assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(16, 40), (18, 30)}
+
+
+def test_backfill_plist_runs_daily_catchup():
+    spec = plistlib.loads(render_plist("backfill", TALON_BIN, DATA_DIR))
+    assert spec["Label"] == "com.talon.backfill"
+    assert spec["ProgramArguments"] == [
+        "/usr/bin/caffeinate",
+        "-s",
+        str(TALON_BIN),
+        "backfill-daily",
+        "--years",
+        "1",
+    ]
+    assert spec["StartCalendarInterval"] == [{"Hour": 19, "Minute": 0}]
+    assert "StartInterval" not in spec
+
+
+def test_every_job_holds_a_sleep_assertion_while_running():
+    for job in JOBS:
+        spec = plistlib.loads(render_plist(job, TALON_BIN, DATA_DIR))
+        assert spec["ProgramArguments"][:2] == ["/usr/bin/caffeinate", "-s"]
 
 
 def test_install_and_uninstall_writes_plists(tmp_path):
