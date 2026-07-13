@@ -3,10 +3,10 @@ from datetime import date
 import polars as pl
 import pytest
 
-from conftest import write_stock_info
+from conftest import stock_info_frame, write_stock_info
 from talon.backtest.data import MarketView, load_panel
 from talon.data.adjust import FACTOR_SCHEMA
-from talon.data.store import ADJUST_FACTORS, DAILY_CANDLES, DAILY_SNAPSHOT_SCHEMA
+from talon.data.store import ADJUST_FACTORS, DAILY_CANDLES, DAILY_SNAPSHOT_SCHEMA, STOCK_INFO
 
 D0 = date(2018, 5, 2)
 D1 = date(2018, 5, 3)
@@ -120,16 +120,58 @@ def test_panel_requires_snapshots_factors_and_stock_info(snapshots, series):
         load_panel(snapshots, series)
 
 
-def test_panel_refuses_days_the_stock_info_does_not_cover(snapshots, series, split_data):
-    uncovered = date(2018, 5, 4)
+def test_panel_carries_the_last_classification_forward(snapshots, series, split_data):
+    newest = date(2018, 5, 4)
     snapshots.write_date(
         DAILY_CANDLES,
-        uncovered,
-        snapshot_frame(uncovered, [{"symbol": "FLAT", "open": 10, "close": 10}]),
+        newest,
+        snapshot_frame(newest, [{"symbol": "FLAT", "open": 10, "close": 10}]),
     )
-    series.replace(ADJUST_FACTORS, "FLAT", factor_frame([(D0, 1.0), (D1, 1.0), (uncovered, 1.0)]))
-    with pytest.raises(ValueError, match="2018-05-04"):
+    series.replace(ADJUST_FACTORS, "FLAT", factor_frame([(D0, 1.0), (D1, 1.0), (newest, 1.0)]))
+
+    panel = load_panel(snapshots, series)
+
+    row = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == newest)).row(0, named=True)
+    assert row["tradable_stock"] is True
+
+
+def test_panel_refuses_classification_staler_than_allowed(snapshots, series, split_data):
+    newest = date(2018, 6, 20)
+    snapshots.write_date(
+        DAILY_CANDLES,
+        newest,
+        snapshot_frame(newest, [{"symbol": "FLAT", "open": 10, "close": 10}]),
+    )
+    series.replace(ADJUST_FACTORS, "FLAT", factor_frame([(D0, 1.0), (D1, 1.0), (newest, 1.0)]))
+
+    with pytest.raises(ValueError, match="낡았습니다"):
+        load_panel(snapshots, series, max_info_stale_days=10)
+
+
+def test_panel_refuses_days_before_any_classification(snapshots, series, split_data):
+    early = date(2018, 4, 2)
+    snapshots.write_date(
+        DAILY_CANDLES,
+        early,
+        snapshot_frame(early, [{"symbol": "FLAT", "open": 10, "close": 10}]),
+    )
+    series.replace(ADJUST_FACTORS, "FLAT", factor_frame([(early, 1.0), (D0, 1.0), (D1, 1.0)]))
+
+    with pytest.raises(ValueError, match="2018-04-02 이전 종목기본정보가 없습니다"):
         load_panel(snapshots, series)
+
+
+def test_carried_forward_classification_never_reads_the_future(snapshots, series, split_data):
+    snapshots.write_date(
+        STOCK_INFO, D1, stock_info_frame(D1, ["SPLIT", "FLAT"], section="관리종목(소속부없음)")
+    )
+
+    panel = load_panel(snapshots, series)
+
+    before = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == D0)).row(0, named=True)
+    after = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == D1)).row(0, named=True)
+    assert before["tradable_stock"] is True
+    assert after["tradable_stock"] is False
 
 
 def test_panel_marks_non_common_stocks_as_untradable(snapshots, series, split_data):

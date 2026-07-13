@@ -37,6 +37,7 @@ def load_panel(
     start: date | None = None,
     end: date | None = None,
     symbols: list[str] | None = None,
+    max_info_stale_days: int = 10,
 ) -> pl.DataFrame:
     daily_scan = snapshots.scan(DAILY_CANDLES)
     if daily_scan is None:
@@ -60,7 +61,9 @@ def load_panel(
     if symbols is not None:
         factors = factors.filter(pl.col("symbol").is_in(symbols))
 
-    info = info_scan.select("day", "symbol", tradable_stock().alias(TRADABLE_STOCK))
+    info = info_scan.select(
+        pl.col("day").alias("info_day"), "symbol", tradable_stock().alias(TRADABLE_STOCK)
+    )
 
     joined = daily.join(factors, on=["symbol", "day"], how="inner").collect()
     raw_height = daily.select(pl.len()).collect().item()
@@ -84,20 +87,41 @@ def load_panel(
     if end is not None:
         panel = panel.filter(pl.col("day") <= end)
 
-    _require_info_coverage(panel, snapshots)
-    panel = panel.join(info.collect(), on=["day", "symbol"], how="left").with_columns(
-        pl.col(TRADABLE_STOCK).fill_null(False)
+    as_of = _info_as_of(panel, snapshots.dates(STOCK_INFO), max_info_stale_days)
+    panel = (
+        panel.join(as_of, on="day", how="left")
+        .join(info.collect(), on=["info_day", "symbol"], how="left")
+        .with_columns(pl.col(TRADABLE_STOCK).fill_null(False))
     )
     return panel.select(PANEL_COLUMNS).sort("day", "symbol")
 
 
-def _require_info_coverage(panel: pl.DataFrame, snapshots: DatePartitionedStore) -> None:
-    missing = sorted(set(panel.get_column("day").unique()) - set(snapshots.dates(STOCK_INFO)))
-    if not missing:
-        return
-    raise ValueError(
-        f"종목기본정보가 없는 거래일 {len(missing)}일 ({missing[0]} ~ {missing[-1]}). "
-        f"talon stock-info backfill --start {missing[0]} --end {missing[-1]} 를 먼저 실행하세요"
+def _info_as_of(
+    panel: pl.DataFrame,
+    info_days: list[date],
+    max_stale_days: int,
+) -> pl.DataFrame:
+    mapping: list[tuple[date, date]] = []
+    for day in sorted(set(panel.get_column("day").unique())):
+        known = [info_day for info_day in info_days if info_day <= day]
+        if not known:
+            raise ValueError(
+                f"{day} 이전 종목기본정보가 없습니다 "
+                f"(talon stock-info backfill --end {day} 를 먼저 실행하세요)"
+            )
+        latest = known[-1]
+        stale_days = (day - latest).days
+        if stale_days > max_stale_days:
+            raise ValueError(
+                f"{day} 종목기본정보가 {latest} 기준으로 {stale_days}일 낡았습니다 "
+                f"(허용 {max_stale_days}일). "
+                f"talon stock-info backfill --start {latest} --end {day} 를 먼저 실행하세요"
+            )
+        mapping.append((day, latest))
+    return pl.DataFrame(
+        mapping,
+        schema={"day": pl.Date(), "info_day": pl.Date()},
+        orient="row",
     )
 
 

@@ -391,6 +391,7 @@ def backtest(
             start=load_start,
             end=end,
             symbols=list(symbols) or None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
         )
     core = QuantCore(
         panel,
@@ -456,6 +457,7 @@ def evaluate(
             start=load_start,
             end=end,
             symbols=list(symbols) or None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
         )
         try:
             kospi = load_index_daily(rt.series, "KOSPI")
@@ -564,6 +566,7 @@ def sensitivity(
             start=load_start,
             end=end,
             symbols=list(symbols) or None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
         )
     trading_panel = panel if start is None else panel.filter(pl.col("day") >= start)
 
@@ -644,6 +647,7 @@ def lookahead(
             start=start,
             end=end,
             symbols=list(symbols) or None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
         )
     cut_days = pick_cuts(panel["day"].unique().to_list(), cuts)
     if not cut_days:
