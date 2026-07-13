@@ -1,15 +1,17 @@
-from datetime import date
+from datetime import date, timedelta
 
 import polars as pl
 import pytest
 
 from conftest import make_candle, utc
 from talon.data.store import (
+    CANDLE_SCHEMA,
     DAILY_CANDLES,
     DAILY_SNAPSHOT_SCHEMA,
     INDICATOR_DAILY,
     INVESTOR_TRADING,
     MARKET_CAP,
+    MINUTE_CANDLES,
 )
 from talon.errors import SourceError
 from talon.ingest.eod import run_eod
@@ -64,19 +66,31 @@ def investor_record():
     )
 
 
+def seed_minutes(series, cal, symbol, high, low, *, coverage=1.0):
+    opened = cal.session_open(DAY)
+    closed = cal.session_close(DAY)
+    total = round((closed - opened).total_seconds() / 60) + 1
+    mid = (high + low) / 2
+    rows = [
+        {
+            "ts": opened + timedelta(minutes=index),
+            "open": mid,
+            "high": high if index == 0 else mid,
+            "low": low if index == 0 else mid,
+            "close": mid,
+            "volume": 10.0,
+        }
+        for index in range(max(int(total * coverage), 1))
+    ]
+    series.upsert(MINUTE_CANDLES, symbol, pl.DataFrame(rows, schema=CANDLE_SCHEMA))
+
+
 class FakeToss:
-    def __init__(self, daily_close=None):
+    def __init__(self):
         self.indicator_calls = []
-        self.daily_close = daily_close or {}
 
     def candles(self, symbol, interval, *, count=200, before=None, adjusted=False):
-        close = self.daily_close.get(symbol)
-        if close is None:
-            return CandlePage(candles=[], next_before=None)
-        return CandlePage(
-            candles=[make_candle(utc(2026, 7, 9, 15, 0), price=close)],
-            next_before=None,
-        )
+        return CandlePage(candles=[], next_before=None)
 
     def candles_since(
         self, symbol, interval, since, *, max_pages=30, adjusted=False, indicator=False
@@ -184,9 +198,8 @@ def test_eod_unexpected_error(cfg, cal, state, snapshots, series, alerter, notif
     assert state.recent_runs("eod")[0].ok is False
 
 
-def test_eod_falls_back_to_fdr_listing(
-    cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch
-):
+@pytest.fixture
+def listing_only(monkeypatch):
     monkeypatch.setattr(
         "talon.ingest.eod.fetch_daily_ohlcv",
         lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
@@ -195,8 +208,14 @@ def test_eod_falls_back_to_fdr_listing(
         "talon.ingest.eod.fetch_krx_listing", lambda day: (ohlcv_frame(), caps_frame())
     )
     monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
-    toss = FakeToss(daily_close={"005930": 70500.0, "000660": 252000.0})
-    summary = run(cfg, cal, state, snapshots, series, alerter, toss=toss)
+
+
+def test_eod_falls_back_to_fdr_listing(
+    cfg, cal, state, snapshots, series, alerter, notifier, listing_only
+):
+    seed_minutes(series, cal, "005930", 71000.0, 69000.0)
+    seed_minutes(series, cal, "000660", 255000.0, 248000.0)
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
     assert summary.status == "ok"
     assert "fdr-listing" in summary.steps["daily"]
     assert summary.steps["crosscheck"] == "skipped (fdr-listing)"
@@ -204,38 +223,36 @@ def test_eod_falls_back_to_fdr_listing(
     assert snapshots.has_date(MARKET_CAP, DAY)
     assert state.latest_universe().symbols == ["005930", "000660"]
     assert any("FDR 전종목 스냅샷" in text for text in notifier.sent)
+    assert not any("검증 불가" in text for text in notifier.sent)
 
 
-def test_eod_fallback_rejected_on_close_mismatch(
-    cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch
+def test_eod_fallback_rejected_on_minute_mismatch(
+    cfg, cal, state, snapshots, series, alerter, notifier, listing_only
 ):
-    monkeypatch.setattr(
-        "talon.ingest.eod.fetch_daily_ohlcv",
-        lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
-    )
-    monkeypatch.setattr(
-        "talon.ingest.eod.fetch_krx_listing", lambda day: (ohlcv_frame(), caps_frame())
-    )
-    toss = FakeToss(daily_close={"005930": 68000.0, "000660": 252000.0})
-    summary = run(cfg, cal, state, snapshots, series, alerter, toss=toss)
+    seed_minutes(series, cal, "005930", 80000.0, 60000.0)
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
     assert summary.status == "data-not-ready"
     assert summary.steps["fdr_listing"] == "stale-or-mismatch"
     assert not snapshots.has_date(DAILY_CANDLES, DAY)
 
 
-def test_eod_fallback_unverified_without_toss(
-    cfg, cal, state, snapshots, series, alerter, notifier, monkeypatch
+def test_eod_fallback_unverified_without_minutes(
+    cfg, cal, state, snapshots, series, alerter, notifier, listing_only
 ):
-    monkeypatch.setattr(
-        "talon.ingest.eod.fetch_daily_ohlcv",
-        lambda day: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
-    )
-    monkeypatch.setattr(
-        "talon.ingest.eod.fetch_krx_listing", lambda day: (ohlcv_frame(), caps_frame())
-    )
-    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
     summary = run(cfg, cal, state, snapshots, series, alerter, toss=None)
     assert summary.status == "ok"
+    assert snapshots.has_date(DAILY_CANDLES, DAY)
+    assert any("검증 불가" in text for text in notifier.sent)
+
+
+def test_eod_fallback_unverified_on_thin_minute_coverage(
+    cfg, cal, state, snapshots, series, alerter, notifier, listing_only
+):
+    seed_minutes(series, cal, "005930", 80000.0, 60000.0, coverage=0.5)
+    seed_minutes(series, cal, "000660", 300000.0, 200000.0, coverage=0.5)
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.status == "ok"
+    assert snapshots.has_date(DAILY_CANDLES, DAY)
     assert any("검증 불가" in text for text in notifier.sent)
 
 

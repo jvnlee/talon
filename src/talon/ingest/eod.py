@@ -11,6 +11,7 @@ from talon.data.store import (
     INDICATOR_DAILY,
     INVESTOR_TRADING,
     MARKET_CAP,
+    MINUTE_CANDLES,
     DatePartitionedStore,
     ParquetStore,
     candles_to_frame,
@@ -30,6 +31,9 @@ from talon.timeutil import KST, now_utc
 log = logging.getLogger(__name__)
 
 INVESTOR_SYMBOLS = ("KOSPI", "KOSDAQ")
+SNAPSHOT_SAMPLE = 3
+SNAPSHOT_TOLERANCE = 0.005
+MINUTE_COVERAGE_RATIO = 0.9
 
 
 def run_eod(
@@ -53,7 +57,7 @@ def run_eod(
     run_id = state.start_job("eod")
     steps: dict[str, str] = {}
     try:
-        summary = _run_eod_steps(cfg, state, snapshots, series, toss, alerter, day, steps)
+        summary = _run_eod_steps(cfg, cal, state, snapshots, series, toss, alerter, day, steps)
     except Exception as exc:
         log.exception("eod failed")
         state.heartbeat("eod", False, {"error": str(exc), "steps": steps})
@@ -72,6 +76,7 @@ def run_eod(
 
 def _run_eod_steps(
     cfg: TalonSettings,
+    cal: KrxCalendar,
     state: StateDB,
     snapshots: DatePartitionedStore,
     series: ParquetStore,
@@ -80,7 +85,7 @@ def _run_eod_steps(
     day: date,
     steps: dict[str, str],
 ) -> EodSummary:
-    ohlcv, caps, source = _load_daily_snapshots(cfg, day, toss, steps, alerter)
+    ohlcv, caps, source = _load_daily_snapshots(cfg, day, series, cal, steps, alerter)
     if ohlcv.is_empty():
         steps["daily"] = "data-not-ready"
         return EodSummary(status="data-not-ready", day=day, steps=steps)
@@ -117,7 +122,8 @@ def _run_eod_steps(
 def _load_daily_snapshots(
     cfg: TalonSettings,
     day: date,
-    toss: TossClient | None,
+    series: ParquetStore,
+    cal: KrxCalendar,
     steps: dict[str, str],
     alerter: Alerter,
 ) -> tuple[pl.DataFrame, pl.DataFrame | None, str]:
@@ -145,11 +151,11 @@ def _load_daily_snapshots(
     if listing_daily.is_empty():
         steps["fdr_listing"] = "empty"
         return empty, None, "none"
-    verdict = _matches_toss_close(listing_daily, day, toss)
+    verdict = _matches_minute_bars(listing_daily, day, series, cal)
     if verdict is False:
         steps["fdr_listing"] = "stale-or-mismatch"
         return empty, None, "none"
-    suffix = "" if verdict else " (토스 표본 검증 불가)"
+    suffix = "" if verdict else " (분봉 대조 검증 불가)"
     alerter.alert(
         "eod-fallback",
         f"{day} 일봉을 pykrx 대신 FDR 전종목 스냅샷으로 적재했습니다{suffix}",
@@ -157,33 +163,60 @@ def _load_daily_snapshots(
     return listing_daily, listing_caps, "fdr-listing"
 
 
-def _matches_toss_close(
+def _matches_minute_bars(
     frame: pl.DataFrame,
     day: date,
-    toss: TossClient | None,
+    series: ParquetStore,
+    cal: KrxCalendar,
     *,
-    sample: int = 3,
-    tolerance: float = 0.001,
+    sample: int = SNAPSHOT_SAMPLE,
+    tolerance: float = SNAPSHOT_TOLERANCE,
 ) -> bool | None:
-    if toss is None:
+    checked = 0
+    for row in frame.sort("value", descending=True).head(sample).iter_rows(named=True):
+        extremes = _session_extremes(series, cal, row["symbol"], day)
+        if extremes is None:
+            continue
+        checked += 1
+        high, low = extremes
+        if _deviates(float(row["high"]), high, tolerance) or _deviates(
+            float(row["low"]), low, tolerance
+        ):
+            log.warning(
+                "daily snapshot disagrees with minute bars for %s on %s: "
+                "snapshot high=%s low=%s, minutes high=%s low=%s",
+                row["symbol"],
+                day,
+                row["high"],
+                row["low"],
+                high,
+                low,
+            )
+            return False
+    return True if checked else None
+
+
+def _session_extremes(
+    series: ParquetStore,
+    cal: KrxCalendar,
+    symbol: str,
+    day: date,
+) -> tuple[float, float] | None:
+    frame = series.read(MINUTE_CANDLES, symbol)
+    if frame is None or frame.is_empty():
         return None
-    top = frame.sort("value", descending=True).head(sample)
-    for row in top.iter_rows(named=True):
-        try:
-            page = toss.candles(row["symbol"], "1d", count=5, adjusted=False)
-        except SourceError as exc:
-            log.warning("toss verification unavailable for %s: %s", row["symbol"], exc)
-            return None
-        bar = next(
-            (c for c in page.candles if c.ts.astimezone(KST).date() == day),
-            None,
-        )
-        if bar is None:
-            return False
-        ours = float(row["close"])
-        if abs(ours - bar.close) / max(ours, bar.close, 1.0) > tolerance:
-            return False
-    return True
+    opened = cal.session_open(day)
+    closed = cal.session_close(day)
+    bars = frame.filter(pl.col("ts").is_between(opened, closed))
+    expected = round((closed - opened).total_seconds() / 60)
+    if bars.height < expected * MINUTE_COVERAGE_RATIO:
+        return None
+    high, low = bars.select(pl.col("high").max(), pl.col("low").min()).row(0)
+    return float(high), float(low)
+
+
+def _deviates(ours: float, theirs: float, tolerance: float) -> bool:
+    return abs(ours - theirs) / max(ours, theirs, 1.0) > tolerance
 
 
 def _load_indicators(
