@@ -50,6 +50,7 @@ class TalonSettings(BaseSettings):
 
     universe_size: int = 300
     universe_min_trading_value: float = 1_000_000_000.0
+    universe_info_max_stale_days: int = 10
     pinned_symbols: CsvList = []
 
     indicator_minute_symbols: CsvList = ["KOSPI", "KOSDAQ"]

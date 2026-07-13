@@ -3,7 +3,14 @@ from datetime import date
 
 import polars as pl
 
-from talon.data.store import ADJUST_FACTORS, DAILY_CANDLES, DatePartitionedStore, ParquetStore
+from talon.data.store import (
+    ADJUST_FACTORS,
+    DAILY_CANDLES,
+    STOCK_INFO,
+    DatePartitionedStore,
+    ParquetStore,
+)
+from talon.quant.universe import TRADABLE_STOCK, tradable_stock
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +26,7 @@ PANEL_COLUMNS = (
     "raw_close",
     "factor",
     "prev_close",
+    TRADABLE_STOCK,
 )
 
 
@@ -36,6 +44,9 @@ def load_panel(
     factors_dir = series.root / ADJUST_FACTORS
     if not factors_dir.exists() or not any(factors_dir.glob("*.parquet")):
         raise ValueError("수정계수가 없습니다 (talon adjust build 먼저 실행)")
+    info_scan = snapshots.scan(STOCK_INFO)
+    if info_scan is None:
+        raise ValueError("종목기본정보가 없습니다 (talon stock-info backfill 먼저 실행)")
 
     if symbols is not None:
         daily_scan = daily_scan.filter(pl.col("symbol").is_in(symbols))
@@ -48,6 +59,8 @@ def load_panel(
     )
     if symbols is not None:
         factors = factors.filter(pl.col("symbol").is_in(symbols))
+
+    info = info_scan.select("day", "symbol", tradable_stock().alias(TRADABLE_STOCK))
 
     joined = daily.join(factors, on=["symbol", "day"], how="inner").collect()
     raw_height = daily.select(pl.len()).collect().item()
@@ -70,7 +83,22 @@ def load_panel(
         panel = panel.filter(pl.col("day") >= start)
     if end is not None:
         panel = panel.filter(pl.col("day") <= end)
+
+    _require_info_coverage(panel, snapshots)
+    panel = panel.join(info.collect(), on=["day", "symbol"], how="left").with_columns(
+        pl.col(TRADABLE_STOCK).fill_null(False)
+    )
     return panel.select(PANEL_COLUMNS).sort("day", "symbol")
+
+
+def _require_info_coverage(panel: pl.DataFrame, snapshots: DatePartitionedStore) -> None:
+    missing = sorted(set(panel.get_column("day").unique()) - set(snapshots.dates(STOCK_INFO)))
+    if not missing:
+        return
+    raise ValueError(
+        f"종목기본정보가 없는 거래일 {len(missing)}일 ({missing[0]} ~ {missing[-1]}). "
+        f"talon stock-info backfill --start {missing[0]} --end {missing[-1]} 를 먼저 실행하세요"
+    )
 
 
 class MarketView:

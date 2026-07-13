@@ -3,7 +3,7 @@ from datetime import date
 import polars as pl
 import pytest
 
-from conftest import make_candle, utc
+from conftest import make_candle, utc, write_stock_info
 from talon.data.store import INDICATOR_MINUTE, MINUTE_CANDLES
 from talon.errors import SourceError
 from talon.ingest.collect import run_collect
@@ -53,10 +53,17 @@ def default_data():
     }
 
 
-def test_collect_happy_path(cfg, cal, seeded_state, series, alerter, notifier):
+def test_collect_happy_path(cfg, cal, seeded_state, series, snapshots, alerter, notifier):
     client = FakeToss(default_data())
     summary = run_collect(
-        cfg, cal=cal, state=seeded_state, store=series, client=client, alerter=alerter, now=NOW
+        cfg,
+        cal=cal,
+        state=seeded_state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=NOW,
     )
     assert summary.status == "ok"
     assert summary.symbols == 2
@@ -71,43 +78,78 @@ def test_collect_happy_path(cfg, cal, seeded_state, series, alerter, notifier):
     assert notifier.sent == []
 
 
-def test_collect_drops_forming_minute(cfg, cal, seeded_state, series, alerter):
+def test_collect_drops_forming_minute(cfg, cal, seeded_state, series, snapshots, alerter):
     data = default_data()
     data["005930"].append(make_candle(utc(2026, 7, 10, 5, 0), price=1.0))
     client = FakeToss(data)
     run_collect(
-        cfg, cal=cal, state=seeded_state, store=series, client=client, alerter=alerter, now=NOW
+        cfg,
+        cal=cal,
+        state=seeded_state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=NOW,
     )
     assert series.last_value(MINUTE_CANDLES, "005930") == utc(2026, 7, 10, 4, 59)
 
 
-def test_collect_incremental_since(cfg, cal, seeded_state, series, alerter):
+def test_collect_incremental_since(cfg, cal, seeded_state, series, snapshots, alerter):
     client = FakeToss(default_data())
     run_collect(
-        cfg, cal=cal, state=seeded_state, store=series, client=client, alerter=alerter, now=NOW
+        cfg,
+        cal=cal,
+        state=seeded_state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=NOW,
     )
     second = run_collect(
-        cfg, cal=cal, state=seeded_state, store=series, client=client, alerter=alerter, now=NOW
+        cfg,
+        cal=cal,
+        state=seeded_state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=NOW,
     )
     assert second.rows == 0
     since_for_005930 = [c[2] for c in client.since_calls if c[0] == "005930"]
     assert since_for_005930[1] == utc(2026, 7, 10, 4, 59)
 
 
-def test_collect_skipped_when_closed(cfg, cal, seeded_state, series, alerter):
+def test_collect_skipped_when_closed(cfg, cal, seeded_state, series, snapshots, alerter):
     client = FakeToss(default_data())
     summary = run_collect(
-        cfg, cal=cal, state=seeded_state, store=series, client=client, alerter=alerter, now=SATURDAY
+        cfg,
+        cal=cal,
+        state=seeded_state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=SATURDAY,
     )
     assert summary.status == "skipped-closed"
     assert seeded_state.get_heartbeat("collect").detail == {"status": "skipped-closed"}
     assert client.since_calls == []
 
 
-def test_collect_degraded_on_failures(cfg, cal, seeded_state, series, alerter, notifier):
+def test_collect_degraded_on_failures(cfg, cal, seeded_state, series, snapshots, alerter, notifier):
     client = FakeToss(default_data(), fail={"000660"})
     summary = run_collect(
-        cfg, cal=cal, state=seeded_state, store=series, client=client, alerter=alerter, now=NOW
+        cfg,
+        cal=cal,
+        state=seeded_state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=NOW,
     )
     assert summary.status == "degraded"
     assert summary.failed == ["000660"]
@@ -115,10 +157,17 @@ def test_collect_degraded_on_failures(cfg, cal, seeded_state, series, alerter, n
     assert any("분봉 수집 실패" in text for text in notifier.sent)
 
 
-def test_collect_auth_error_aborts(cfg, cal, seeded_state, series, alerter, notifier):
+def test_collect_auth_error_aborts(cfg, cal, seeded_state, series, snapshots, alerter, notifier):
     client = FakeToss(default_data(), auth_fail=True)
     summary = run_collect(
-        cfg, cal=cal, state=seeded_state, store=series, client=client, alerter=alerter, now=NOW
+        cfg,
+        cal=cal,
+        state=seeded_state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=NOW,
     )
     assert summary.status == "error"
     assert any("분봉 수집 실패" in text for text in notifier.sent)
@@ -135,12 +184,20 @@ def _bootstrap_caps():
     )
 
 
-def test_collect_bootstraps_universe(cfg, cal, state, series, alerter, monkeypatch):
+def test_collect_bootstraps_universe(cfg, cal, state, series, snapshots, alerter, monkeypatch):
     monkeypatch.setattr("talon.ingest.collect.fetch_market_cap", lambda day: _bootstrap_caps())
     monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    write_stock_info(snapshots, [date(2026, 7, 10)], ["005930", "000660"])
     client = FakeToss(default_data())
     summary = run_collect(
-        cfg, cal=cal, state=state, store=series, client=client, alerter=alerter, now=NOW
+        cfg,
+        cal=cal,
+        state=state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=NOW,
     )
     assert summary.status == "ok"
     snapshot = state.latest_universe()
@@ -149,7 +206,9 @@ def test_collect_bootstraps_universe(cfg, cal, state, series, alerter, monkeypat
     assert snapshot.day == date(2026, 7, 10)
 
 
-def test_collect_bootstrap_falls_back_to_listing(cfg, cal, state, series, alerter, monkeypatch):
+def test_collect_bootstrap_falls_back_to_listing(
+    cfg, cal, state, series, snapshots, alerter, monkeypatch
+):
     def krx_down(day):
         raise SourceError("krx blocked")
 
@@ -159,9 +218,17 @@ def test_collect_bootstrap_falls_back_to_listing(cfg, cal, state, series, alerte
         lambda day: (pl.DataFrame(), _bootstrap_caps()),
     )
     monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    write_stock_info(snapshots, [date(2026, 7, 10)], ["005930", "000660"])
     client = FakeToss(default_data())
     summary = run_collect(
-        cfg, cal=cal, state=state, store=series, client=client, alerter=alerter, now=NOW
+        cfg,
+        cal=cal,
+        state=state,
+        store=series,
+        snapshots=snapshots,
+        client=client,
+        alerter=alerter,
+        now=NOW,
     )
     assert summary.status == "ok"
     snapshot = state.latest_universe()

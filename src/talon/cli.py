@@ -32,6 +32,7 @@ from talon.data.store import (
     DELISTING,
     INDICATOR_MINUTE,
     MINUTE_CANDLES,
+    STOCK_INFO,
     DatePartitionedStore,
     ParquetStore,
 )
@@ -128,6 +129,7 @@ def collect(force: bool) -> None:
                 cal=rt.cal,
                 state=rt.state,
                 store=rt.series,
+                snapshots=rt.snapshots,
                 client=rt.client,
                 alerter=rt.alerter,
                 force=force,
@@ -721,8 +723,11 @@ def universe() -> None:
 @universe.command("rebuild")
 def universe_rebuild() -> None:
     cfg = load_settings()
-    with runtime(cfg, toss="optional") as rt:
-        symbols = bootstrap_universe(cfg, rt.state, rt.cal, _today_kst(), rt.client)
+    with runtime(cfg, toss="skip") as rt:
+        try:
+            symbols = bootstrap_universe(cfg, rt.state, rt.cal, _today_kst(), rt.snapshots)
+        except TalonError as exc:
+            raise click.ClickException(str(exc)) from exc
     click.echo(f"유니버스 갱신 완료: {len(symbols)}종목")
 
 
@@ -750,6 +755,7 @@ def status() -> None:
             "backfill-daily",
             "adjust-build",
             "index-backfill",
+            "stock-info-backfill",
         )
         for job in jobs:
             heartbeat = rt.state.get_heartbeat(job)
@@ -766,11 +772,16 @@ def status() -> None:
         minute_symbols = rt.series.names(MINUTE_CANDLES)
         indicator_symbols = rt.series.names(INDICATOR_MINUTE)
         daily_dates = rt.snapshots.dates(DAILY_CANDLES)
+        info_dates = rt.snapshots.dates(STOCK_INFO)
         click.echo(f"분봉 적재 종목: {len(minute_symbols)} · 지표: {len(indicator_symbols)}")
         if daily_dates:
             click.echo(f"일봉 스냅샷: {len(daily_dates)}일 ({daily_dates[0]} ~ {daily_dates[-1]})")
         else:
             click.echo("일봉 스냅샷: 없음")
+        if info_dates:
+            click.echo(f"종목기본정보: {len(info_dates)}일 ({info_dates[0]} ~ {info_dates[-1]})")
+        else:
+            click.echo("종목기본정보: 없음 (talon stock-info backfill 필요)")
         snapshot = rt.state.latest_universe()
         if snapshot:
             click.echo(f"유니버스: {snapshot.day} 기준 {len(snapshot.symbols)}종목")
@@ -856,6 +867,92 @@ def index_backfill(
     click.echo(summary.model_dump_json())
     if summary.status == "error":
         sys.exit(1)
+
+
+@main.group("stock-info")
+def stock_info() -> None:
+    """KRX 공식 종목기본정보 — 유니버스 분류의 정본."""
+
+
+@stock_info.command("backfill")
+@click.option("--years", type=int, default=None)
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--force", is_flag=True, help="이미 받은 날짜도 다시 받는다")
+def stock_info_backfill(
+    years: int | None,
+    start_text: str | None,
+    end_text: str | None,
+    force: bool,
+) -> None:
+    from talon.ingest.stockinfo import backfill_stock_info
+
+    cfg = load_settings()
+    if not cfg.krx_openapi_configured:
+        raise click.ClickException("TALON_KRX_API_KEY 설정이 필요합니다")
+    with job_lock(cfg.locks_dir / "stock-info.lock") as acquired:
+        if not acquired:
+            click.echo("stock-info backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if start_text:
+                start = date.fromisoformat(start_text)
+            else:
+                span_years = years if years is not None else cfg.backfill_years
+                start = end - timedelta(days=round(365.25 * span_years))
+
+            def report(index: int, total: int, day: date) -> None:
+                if index % 25 == 0 or index == total:
+                    click.echo(f"{index}/{total} {day}")
+
+            summary = backfill_stock_info(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                start=start,
+                end=end,
+                force=force,
+                progress=report,
+            )
+    click.echo(summary.model_dump_json())
+
+
+@stock_info.command("show")
+@click.option("--date", "day_text", default=None, help="YYYY-MM-DD (기본: 최신)")
+def stock_info_show(day_text: str | None) -> None:
+    from talon.quant.universe import SECURITY_GROUP, SHARE_KIND, tradable_stock
+
+    cfg = load_settings()
+    snapshots = DatePartitionedStore(cfg.parquet_dir)
+    days = snapshots.dates(STOCK_INFO)
+    if not days:
+        click.echo("종목기본정보가 없습니다 (talon stock-info backfill 먼저 실행)")
+        return
+    day = date.fromisoformat(day_text) if day_text else days[-1]
+    frame = snapshots.read_date(STOCK_INFO, day)
+    if frame is None:
+        raise click.ClickException(f"{day} 종목기본정보가 없습니다")
+    tradable = frame.filter(tradable_stock())
+    click.echo(f"적재 범위: {days[0]} ~ {days[-1]} ({len(days)}일)")
+    click.echo(f"{day} 기준 {frame.height}종목 중 매매대상 보통주 {tradable.height}종목")
+
+    is_stock = pl.col("security_group") == SECURITY_GROUP
+    is_common = pl.col("share_kind") == SHARE_KIND
+    dropped = frame.filter(~tradable_stock())
+    reasons = (
+        ("증권군", dropped.filter(~is_stock).group_by("security_group").len()),
+        ("주식종류", dropped.filter(is_stock & ~is_common).group_by("share_kind").len()),
+        ("소속부", dropped.filter(is_stock & is_common).group_by("section").len()),
+    )
+    for label, counts in reasons:
+        for name, count in sorted(counts.iter_rows(), key=lambda row: -row[1]):
+            click.echo(f"  제외 [{label}] {name}: {count}")
 
 
 @main.group()

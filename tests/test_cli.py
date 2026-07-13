@@ -1,5 +1,6 @@
 from click.testing import CliRunner
 
+from conftest import write_stock_info
 from talon.cli import main
 
 
@@ -7,7 +8,15 @@ def test_help_smoke():
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for command in ("collect", "eod", "backfill-daily", "watchdog", "status", "launchd"):
+    for command in (
+        "collect",
+        "eod",
+        "backfill-daily",
+        "watchdog",
+        "status",
+        "launchd",
+        "stock-info",
+    ):
         assert command in result.output
 
 
@@ -72,6 +81,7 @@ def _write_flat_daily(snapshots, series, count=6):
         "AAA",
         pl.DataFrame({"day": days, "factor": [1.0] * len(days)}, schema=FACTOR_SCHEMA),
     )
+    write_stock_info(snapshots, days, ["AAA"])
 
 
 def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):

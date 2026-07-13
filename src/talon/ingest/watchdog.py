@@ -8,6 +8,7 @@ from talon.data.store import (
     ADJUST_MANIFEST,
     ADJUST_MANIFEST_NAME,
     DAILY_CANDLES,
+    STOCK_INFO,
     DatePartitionedStore,
     ParquetStore,
 )
@@ -46,6 +47,18 @@ def _factors_behind(
     if latest_factor is not None and latest_factor >= daily_days[-1]:
         return None
     return daily_days[-1], latest_factor
+
+
+def _stock_info_stale(
+    snapshots: DatePartitionedStore,
+    day: date,
+    max_stale_days: int,
+) -> tuple[bool, date | None]:
+    known = [known_day for known_day in snapshots.dates(STOCK_INFO) if known_day <= day]
+    latest = known[-1] if known else None
+    if latest is not None and (day - latest).days <= max_stale_days:
+        return False, latest
+    return True, latest
 
 
 def run_watchdog(
@@ -88,6 +101,15 @@ def run_watchdog(
     if kst_now.time() >= EOD_DEADLINE and not snapshots.has_date(DAILY_CANDLES, day):
         issues.append("eod-missing")
         alerter.alert("eod-missing", f"{day} 일봉 EOD 스냅샷이 아직 없습니다")
+
+    stale, as_of = _stock_info_stale(snapshots, day, cfg.universe_info_max_stale_days)
+    if stale:
+        issues.append("stock-info-stale")
+        alerter.alert(
+            "stock-info-stale",
+            f"종목기본정보가 {as_of or '없음'} 기준입니다 — 유니버스 갱신이 멈춥니다 "
+            "(reconcile 잡과 talon stock-info backfill 확인)",
+        )
 
     if kst_now.time() >= ADJUST_DEADLINE and not _job_in_flight(state, "adjust-build"):
         behind = _factors_behind(snapshots, series)

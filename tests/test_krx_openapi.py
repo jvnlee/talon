@@ -131,3 +131,80 @@ def test_queries_both_markets_with_basdd():
     ]
     assert all(params == {"basDd": "20260709"} for _, params, _ in seen)
     assert all(key == "secret" for _, _, key in seen)
+
+
+def info_record(symbol, *, market="KOSPI", group="주권", kind="보통주", section=""):
+    return {
+        "ISU_CD": f"KR7{symbol}008",
+        "ISU_SRT_CD": symbol,
+        "ISU_NM": f"종목{symbol}보통주",
+        "ISU_ABBRV": f"종목{symbol}",
+        "ISU_ENG_NM": f"Stock {symbol}",
+        "LIST_DD": "20150821",
+        "MKT_TP_NM": market,
+        "SECUGRP_NM": group,
+        "SECT_TP_NM": section,
+        "KIND_STKCERT_TP_NM": kind,
+        "PARVAL": "1000",
+        "LIST_SHRS": "45,252,759",
+    }
+
+
+def test_stock_info_maps_krx_classification_fields():
+    source = source_with(
+        {
+            "stk_isu_base_info": ok([info_record("005930")]),
+            "ksq_isu_base_info": ok([info_record("035720", market="KOSDAQ", section="우량기업부")]),
+        }
+    )
+    info = source.stock_info(DAY)
+
+    assert info["symbol"].to_list() == ["005930", "035720"]
+    row = info.filter(info["symbol"] == "005930").row(0, named=True)
+    assert row["day"] == DAY
+    assert row["name"] == "종목005930"
+    assert row["market"] == "KOSPI"
+    assert row["security_group"] == "주권"
+    assert row["share_kind"] == "보통주"
+    assert row["section"] == ""
+    assert row["listed_on"] == date(2015, 8, 21)
+    assert row["shares"] == 45_252_759.0
+
+
+def test_stock_info_keeps_the_classifications_that_disqualify_a_stock():
+    source = source_with(
+        {
+            "stk_isu_base_info": ok(
+                [
+                    info_record("395400", group="부동산투자회사"),
+                    info_record("005935", kind="구형우선주"),
+                ]
+            ),
+            "ksq_isu_base_info": ok(
+                [
+                    info_record("900140", market="KOSDAQ", group="외국주권"),
+                    info_record("123450", market="KOSDAQ", section="관리종목(소속부없음)"),
+                ]
+            ),
+        }
+    )
+    info = source.stock_info(DAY)
+
+    by_symbol = {row["symbol"]: row for row in info.iter_rows(named=True)}
+    assert by_symbol["395400"]["security_group"] == "부동산투자회사"
+    assert by_symbol["005935"]["share_kind"] == "구형우선주"
+    assert by_symbol["900140"]["security_group"] == "외국주권"
+    assert by_symbol["123450"]["section"] == "관리종목(소속부없음)"
+
+
+def test_stock_info_empty_on_holidays():
+    source = source_with({"stk_isu_base_info": ok([]), "ksq_isu_base_info": ok([])})
+    assert source.stock_info(date(2026, 6, 3)).is_empty()
+
+
+def test_stock_info_schema_drift():
+    broken = dict(info_record("005930"))
+    del broken["SECUGRP_NM"]
+    source = source_with({"stk_isu_base_info": ok([broken]), "ksq_isu_base_info": ok([])})
+    with pytest.raises(SchemaDriftError, match="SECUGRP_NM"):
+        source.stock_info(DAY)

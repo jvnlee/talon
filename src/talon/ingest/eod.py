@@ -112,9 +112,15 @@ def _run_eod_steps(
 
     universe_size = 0
     try:
-        build = rebuild_universe(cfg, state, day, liquidity, toss=toss)
+        build = rebuild_universe(cfg, state, day, liquidity, snapshots=snapshots)
         universe_size = len(build.symbols)
         steps["universe"] = f"{universe_size} symbols"
+        if not build.criteria["admin_excluded"]:
+            alerter.alert(
+                "admin-list-unavailable",
+                f"{day} 관리종목 목록을 받지 못해 KOSPI 관리종목을 거르지 못했습니다 "
+                "(코스닥 관리종목은 KRX 공식 분류로 계속 걸립니다)",
+            )
     except SourceError as exc:
         steps["universe"] = f"error: {exc}"
         alerter.alert("universe-error", f"{day} 유니버스 갱신 실패: {exc}")

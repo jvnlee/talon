@@ -6,6 +6,7 @@ from talon.data.state import StateDB
 from talon.data.store import (
     INDICATOR_MINUTE,
     MINUTE_CANDLES,
+    DatePartitionedStore,
     ParquetStore,
     candles_to_frame,
 )
@@ -30,7 +31,7 @@ def bootstrap_universe(
     state: StateDB,
     cal: KrxCalendar,
     day: date,
-    toss: TossClient | None,
+    snapshots: DatePartitionedStore,
 ) -> list[str]:
     latest = cal.latest_trading_day(day)
     probe = latest
@@ -41,7 +42,7 @@ def bootstrap_universe(
             log.warning("pykrx market cap failed for %s: %s", probe, exc)
             break
         if not caps.is_empty():
-            build = rebuild_universe(cfg, state, probe, caps, toss=toss)
+            build = rebuild_universe(cfg, state, probe, caps, snapshots=snapshots)
             return build.symbols
         probe = cal.previous_trading_day(probe)
     try:
@@ -50,7 +51,7 @@ def bootstrap_universe(
         raise SourceError(f"universe bootstrap failed on all sources: {exc}") from exc
     if caps.is_empty():
         raise SourceError("universe bootstrap failed: FDR listing snapshot empty")
-    build = rebuild_universe(cfg, state, latest, caps, toss=toss)
+    build = rebuild_universe(cfg, state, latest, caps, snapshots=snapshots)
     return build.symbols
 
 
@@ -64,6 +65,7 @@ def run_collect(
     cal: KrxCalendar,
     state: StateDB,
     store: ParquetStore,
+    snapshots: DatePartitionedStore,
     client: TossClient,
     alerter: Alerter,
     now=None,
@@ -78,7 +80,7 @@ def run_collect(
 
     run_id = state.start_job("collect")
     try:
-        summary = _collect(cfg, cal, state, store, client, now)
+        summary = _collect(cfg, cal, state, store, snapshots, client, now)
     except Exception as exc:
         log.exception("collect failed")
         state.heartbeat("collect", False, {"error": str(exc)})
@@ -103,6 +105,7 @@ def _collect(
     cal: KrxCalendar,
     state: StateDB,
     store: ParquetStore,
+    snapshots: DatePartitionedStore,
     client: TossClient,
     now,
 ) -> CollectSummary:
@@ -111,7 +114,7 @@ def _collect(
         universe = snapshot.symbols
     else:
         log.info("no universe snapshot, bootstrapping")
-        universe = bootstrap_universe(cfg, state, cal, now.astimezone(KST).date(), client)
+        universe = bootstrap_universe(cfg, state, cal, now.astimezone(KST).date(), snapshots)
     symbols = list(dict.fromkeys([*universe, *cfg.pinned_symbols]))
     cutoff = minute_floor(now)
 

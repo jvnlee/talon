@@ -2,13 +2,12 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import date, datetime
-from itertools import batched
 from typing import Any
 
 import httpx
 
 from talon.errors import SourceError
-from talon.models import Candle, CandlePage, InvestorFlowRecord, StockInfo
+from talon.models import Candle, CandlePage, InvestorFlowRecord
 
 log = logging.getLogger(__name__)
 
@@ -268,13 +267,6 @@ class TossClient:
             params["until"] = until
         result = self._request(f"/api/v1/market-indicators/{symbol}/investor-trading", params)
         return [InvestorFlowRecord.from_toss(raw) for raw in result.get("records", [])]
-
-    def stocks(self, symbols: list[str]) -> list[StockInfo]:
-        infos: list[StockInfo] = []
-        for chunk in batched(symbols, 200):
-            result = self._request("/api/v1/stocks", {"symbols": ",".join(chunk)})
-            infos.extend(StockInfo.model_validate(raw) for raw in result)
-        return infos
 
     def market_calendar_kr(self, day: date | None = None) -> dict[str, Any]:
         params = {"date": day.isoformat()} if day is not None else None

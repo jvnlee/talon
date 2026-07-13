@@ -262,42 +262,6 @@ def test_oauth_error_format():
     assert excinfo.value.code == "invalid_client"
 
 
-def test_stocks_chunks_requests():
-    symbol_batches = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/oauth2/token":
-            return httpx.Response(200, json=TOKEN_RESPONSE)
-        symbols = request.url.params["symbols"].split(",")
-        symbol_batches.append(len(symbols))
-        return httpx.Response(
-            200,
-            json=envelope(
-                [
-                    {
-                        "symbol": symbol,
-                        "name": "이름",
-                        "englishName": "Name",
-                        "isinCode": "KR0000000000",
-                        "market": "KOSPI",
-                        "securityType": "STOCK",
-                        "isCommonShare": True,
-                        "status": "ACTIVE",
-                        "currency": "KRW",
-                        "sharesOutstanding": "100",
-                    }
-                    for symbol in symbols
-                ]
-            ),
-        )
-
-    client, _ = make_client(handler)
-    infos = client.stocks([f"{i:06d}" for i in range(250)])
-    assert symbol_batches == [200, 50]
-    assert len(infos) == 250
-    assert infos[0].security_type == "STOCK"
-
-
 def test_investor_trading_parsing():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/oauth2/token":

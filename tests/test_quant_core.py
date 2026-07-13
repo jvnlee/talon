@@ -19,7 +19,17 @@ def d(i):
     return BASE + timedelta(days=i)
 
 
-def bar(day, symbol, open_, close=None, high=None, low=None, volume=1e9, factor=1.0):
+def bar(
+    day,
+    symbol,
+    open_,
+    close=None,
+    high=None,
+    low=None,
+    volume=1e9,
+    factor=1.0,
+    tradable=True,
+):
     close = close if close is not None else open_
     high = high if high is not None else max(open_, close)
     low = low if low is not None else min(open_, close)
@@ -34,6 +44,7 @@ def bar(day, symbol, open_, close=None, high=None, low=None, volume=1e9, factor=
         "value": float(close) * float(volume),
         "raw_close": float(close) / factor,
         "factor": float(factor),
+        "tradable_stock": bool(tradable),
     }
 
 
@@ -232,7 +243,7 @@ def test_universe_gates_entries_but_not_exits():
         close = 94.0 if i >= 2 else 100.0
         rows.append(bar(d(i), "000010", close, volume=1e6))
         rows.append(bar(d(i), "000020", 100.0, volume=1.0))
-        rows.append(bar(d(i), "000015", 100.0, volume=1e6))
+        rows.append(bar(d(i), "000015", 100.0, volume=1e6, tradable=False))
     panel = build_panel(rows)
     core = QuantCore(
         panel,

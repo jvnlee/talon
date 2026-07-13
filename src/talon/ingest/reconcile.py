@@ -5,7 +5,7 @@ import polars as pl
 
 from talon.config import TalonSettings
 from talon.data.state import StateDB
-from talon.data.store import DAILY_CANDLES, MARKET_CAP, DatePartitionedStore
+from talon.data.store import DAILY_CANDLES, MARKET_CAP, STOCK_INFO, DatePartitionedStore
 from talon.errors import SourceError
 from talon.markets.kr import KrxCalendar
 from talon.models import ReconcileDay, ReconcileSummary
@@ -61,6 +61,20 @@ def apply_official(
     return merged.sort("symbol"), corrections, added.height
 
 
+def _refresh_stock_info(
+    source: KrxOpenApiSource,
+    snapshots: DatePartitionedStore,
+    day: date,
+) -> None:
+    try:
+        info = source.stock_info(day)
+    except SourceError as exc:
+        log.warning("stock info unavailable for %s: %s", day, exc)
+        return
+    if not info.is_empty():
+        snapshots.write_date(STOCK_INFO, day, info)
+
+
 def _reconcile_day(
     source: KrxOpenApiSource,
     snapshots: DatePartitionedStore,
@@ -74,6 +88,8 @@ def _reconcile_day(
 
     if official_daily.is_empty():
         return ReconcileDay(day=day, status="unavailable")
+
+    _refresh_stock_info(source, snapshots, day)
 
     ours = snapshots.read_date(DAILY_CANDLES, day)
     if ours is None:

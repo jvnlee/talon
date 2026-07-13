@@ -7,13 +7,14 @@ from typing import Any
 import httpx
 import polars as pl
 
-from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA
+from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA, STOCK_INFO_SCHEMA
 from talon.errors import SchemaDriftError, SourceError
 
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://data-dbg.krx.co.kr/svc/apis"
 STOCK_ENDPOINTS = ("sto/stk_bydd_trd", "sto/ksq_bydd_trd")
+INFO_ENDPOINTS = ("sto/stk_isu_base_info", "sto/ksq_isu_base_info")
 EARLIEST_DAY = date(2010, 1, 4)
 
 _REQUIRED_FIELDS = (
@@ -28,6 +29,17 @@ _REQUIRED_FIELDS = (
     "LIST_SHRS",
 )
 
+_INFO_FIELDS = (
+    "ISU_SRT_CD",
+    "ISU_ABBRV",
+    "MKT_TP_NM",
+    "SECUGRP_NM",
+    "KIND_STKCERT_TP_NM",
+    "SECT_TP_NM",
+    "LIST_DD",
+    "LIST_SHRS",
+)
+
 _TRADABLE = (pl.col("close") > 0) & (pl.col("high") > 0)
 
 
@@ -37,6 +49,20 @@ def _number(raw: Any) -> float | None:
         return None
     try:
         return float(text)
+    except ValueError:
+        return None
+
+
+def _text(raw: Any) -> str:
+    return "" if raw is None else str(raw).strip()
+
+
+def _listing_day(raw: Any) -> date | None:
+    text = _text(raw).replace("-", "")
+    if len(text) != 8 or not text.isdigit():
+        return None
+    try:
+        return date(int(text[:4]), int(text[4:6]), int(text[6:]))
     except ValueError:
         return None
 
@@ -89,19 +115,47 @@ class KrxOpenApiSource:
                 return [row for row in value if isinstance(row, dict)]
         raise SchemaDriftError(f"KRX Open API 응답에 레코드 배열이 없습니다 ({endpoint})")
 
-    def fetch(self, day: date) -> list[dict[str, Any]]:
+    def _fetch(
+        self,
+        day: date,
+        endpoints: tuple[str, ...],
+        required: tuple[str, ...],
+        label: str,
+    ) -> list[dict[str, Any]]:
         if day < EARLIEST_DAY:
             raise SourceError(f"KRX Open API는 {EARLIEST_DAY}부터 제공됩니다 (요청: {day})")
         records: list[dict[str, Any]] = []
-        for index, endpoint in enumerate(STOCK_ENDPOINTS):
+        for index, endpoint in enumerate(endpoints):
             if index and self._throttle:
                 self._sleep(self._throttle)
             records += self.rows(endpoint, day)
         if records:
-            missing = sorted(f for f in _REQUIRED_FIELDS if f not in records[0])
+            missing = sorted(f for f in required if f not in records[0])
             if missing:
-                raise SchemaDriftError(f"KRX Open API 필드 누락: {missing}")
+                raise SchemaDriftError(f"KRX Open API {label} 필드 누락: {missing}")
         return records
+
+    def fetch(self, day: date) -> list[dict[str, Any]]:
+        return self._fetch(day, STOCK_ENDPOINTS, _REQUIRED_FIELDS, "일별매매정보")
+
+    def stock_info(self, day: date) -> pl.DataFrame:
+        rows = self._fetch(day, INFO_ENDPOINTS, _INFO_FIELDS, "종목기본정보")
+        if not rows:
+            return pl.DataFrame(schema=STOCK_INFO_SCHEMA)
+        return pl.DataFrame(
+            {
+                "day": [day] * len(rows),
+                "symbol": [_text(row["ISU_SRT_CD"]) for row in rows],
+                "name": [_text(row["ISU_ABBRV"]) for row in rows],
+                "market": [_text(row["MKT_TP_NM"]) for row in rows],
+                "security_group": [_text(row["SECUGRP_NM"]) for row in rows],
+                "share_kind": [_text(row["KIND_STKCERT_TP_NM"]) for row in rows],
+                "section": [_text(row["SECT_TP_NM"]) for row in rows],
+                "listed_on": [_listing_day(row["LIST_DD"]) for row in rows],
+                "shares": [_number(row["LIST_SHRS"]) for row in rows],
+            },
+            schema=STOCK_INFO_SCHEMA,
+        ).sort("symbol")
 
     def snapshot(self, day: date) -> tuple[pl.DataFrame, pl.DataFrame]:
         rows = self.fetch(day)

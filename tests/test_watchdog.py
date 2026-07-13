@@ -1,9 +1,11 @@
+import shutil
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
-from conftest import FakeNotifier, utc
-from talon.data.store import ADJUST_MANIFEST, ADJUST_MANIFEST_NAME, DAILY_CANDLES
+from conftest import FakeNotifier, utc, write_stock_info
+from talon.data.store import ADJUST_MANIFEST, ADJUST_MANIFEST_NAME, DAILY_CANDLES, STOCK_INFO
 from talon.ingest.factors import MANIFEST_SCHEMA
 from talon.ingest.watchdog import run_watchdog
 from talon.notify.telegram import Alerter
@@ -14,6 +16,16 @@ NIGHT = utc(2026, 7, 10, 12, 30)
 SATURDAY = utc(2026, 7, 11, 3, 0)
 
 DAY = date(2026, 7, 10)
+YESTERDAY = date(2026, 7, 9)
+
+
+@pytest.fixture(autouse=True)
+def fresh_stock_info(snapshots):
+    write_stock_info(snapshots, [YESTERDAY], ["005930"])
+
+
+def drop_stock_info(snapshots):
+    shutil.rmtree(snapshots.root / STOCK_INFO)
 
 
 def run(cfg, cal, state, snapshots, series, alerter, now):
@@ -150,3 +162,32 @@ def test_alert_cooldown_suppresses_repeat(cfg, cal, state, snapshots, series):
     run(cfg, cal, state, snapshots, series, alerter, IN_SESSION)
     run(cfg, cal, state, snapshots, series, alerter, IN_SESSION)
     assert len(notifier.sent) == 1
+
+
+def test_stock_info_missing_alerts(cfg, cal, state, snapshots, series, alerter, notifier):
+    drop_stock_info(snapshots)
+    seed_daily(snapshots)
+    summary = run(cfg, cal, state, snapshots, series, alerter, EVENING)
+
+    assert "stock-info-stale" in summary.issues
+    assert any("종목기본정보가 없음 기준입니다" in text for text in notifier.sent)
+
+
+def test_stock_info_stale_alerts(cfg, cal, state, snapshots, series, alerter, notifier):
+    drop_stock_info(snapshots)
+    write_stock_info(snapshots, [date(2026, 6, 1)], ["005930"])
+    seed_daily(snapshots)
+    summary = run(cfg, cal, state, snapshots, series, alerter, EVENING)
+
+    assert "stock-info-stale" in summary.issues
+    assert any("2026-06-01 기준입니다" in text for text in notifier.sent)
+
+
+def test_yesterdays_stock_info_is_fresh_enough(
+    cfg, cal, state, snapshots, series, alerter, notifier
+):
+    seed_daily(snapshots)
+    summary = run(cfg, cal, state, snapshots, series, alerter, EVENING)
+
+    assert "stock-info-stale" not in summary.issues
+    assert not any("종목기본정보" in text for text in notifier.sent)

@@ -3,7 +3,14 @@ from datetime import date
 import polars as pl
 import pytest
 
-from talon.data.store import DAILY_CANDLES, DAILY_SNAPSHOT_SCHEMA, MARKET_CAP, MARKET_CAP_SCHEMA
+from talon.data.store import (
+    DAILY_CANDLES,
+    DAILY_SNAPSHOT_SCHEMA,
+    MARKET_CAP,
+    MARKET_CAP_SCHEMA,
+    STOCK_INFO,
+    STOCK_INFO_SCHEMA,
+)
 from talon.errors import SourceError
 from talon.ingest.reconcile import apply_official, reconcile_daily
 
@@ -54,11 +61,32 @@ OFFICIAL_CAPS = [
 ]
 
 
+def stock_info_frame(day, symbols):
+    return pl.DataFrame(
+        [
+            {
+                "day": day,
+                "symbol": symbol,
+                "name": symbol,
+                "market": "KOSPI",
+                "security_group": "주권",
+                "share_kind": "보통주",
+                "section": "",
+                "listed_on": date(2010, 1, 4),
+                "shares": 1000.0,
+            }
+            for symbol in symbols
+        ],
+        schema=STOCK_INFO_SCHEMA,
+    )
+
+
 class FakeKrx:
     def __init__(self, by_day):
         self.by_day = by_day
         self.closed = False
         self.asked = []
+        self.info_asked = []
 
     def snapshot(self, day):
         self.asked.append(day)
@@ -71,6 +99,10 @@ class FakeKrx:
         if isinstance(entry, Exception):
             raise entry
         return entry
+
+    def stock_info(self, day):
+        self.info_asked.append(day)
+        return stock_info_frame(day, [row[0] for row in OFFICIAL])
 
     def close(self):
         self.closed = True
@@ -197,6 +229,24 @@ def test_walks_every_session_in_range_and_closes_nothing_it_borrowed(
     run(cfg, cal, state, snapshots, alerter, source, start=WED, end=FRI)
     assert source.asked == [WED, THU, FRI]
     assert source.closed is False
+
+
+def test_stores_official_stock_info_for_the_day(cfg, cal, state, snapshots, alerter):
+    source = FakeKrx({THU: official_for(THU)})
+    run(cfg, cal, state, snapshots, alerter, source, start=THU, end=THU)
+
+    stored = snapshots.read_date(STOCK_INFO, THU)
+    assert stored is not None
+    assert stored.get_column("symbol").to_list() == ["005930", "035720"]
+    assert source.info_asked == [THU]
+
+
+def test_skips_stock_info_on_unpublished_days(cfg, cal, state, snapshots, alerter):
+    source = FakeKrx({})
+    run(cfg, cal, state, snapshots, alerter, source, start=THU, end=THU)
+
+    assert source.info_asked == []
+    assert snapshots.read_date(STOCK_INFO, THU) is None
 
 
 @pytest.mark.parametrize(

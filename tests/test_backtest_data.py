@@ -3,6 +3,7 @@ from datetime import date
 import polars as pl
 import pytest
 
+from conftest import write_stock_info
 from talon.backtest.data import MarketView, load_panel
 from talon.data.adjust import FACTOR_SCHEMA
 from talon.data.store import ADJUST_FACTORS, DAILY_CANDLES, DAILY_SNAPSHOT_SCHEMA
@@ -61,6 +62,7 @@ def split_data(snapshots, series):
     )
     series.replace(ADJUST_FACTORS, "SPLIT", factor_frame([(D0, 0.02), (D1, 1.0)]))
     series.replace(ADJUST_FACTORS, "FLAT", factor_frame([(D0, 1.0), (D1, 1.0)]))
+    write_stock_info(snapshots, [D0, D1], ["SPLIT", "FLAT"])
 
 
 def test_panel_adjusts_prices_and_keeps_raw(snapshots, series, split_data):
@@ -94,16 +96,18 @@ def test_panel_symbol_and_date_filters(snapshots, series, split_data):
 
 
 def test_panel_drops_symbols_without_factors(snapshots, series, split_data):
+    day = date(2018, 5, 4)
     snapshots.write_date(
         DAILY_CANDLES,
-        date(2018, 5, 4),
-        snapshot_frame(date(2018, 5, 4), [{"symbol": "NOFAC", "open": 10, "close": 10}]),
+        day,
+        snapshot_frame(day, [{"symbol": "NOFAC", "open": 10, "close": 10}]),
     )
+    write_stock_info(snapshots, [day], ["NOFAC"])
     panel = load_panel(snapshots, series)
     assert "NOFAC" not in panel["symbol"].unique().to_list()
 
 
-def test_panel_requires_snapshots_and_factors(snapshots, series):
+def test_panel_requires_snapshots_factors_and_stock_info(snapshots, series):
     with pytest.raises(ValueError, match="일봉"):
         load_panel(snapshots, series)
     snapshots.write_date(
@@ -111,6 +115,45 @@ def test_panel_requires_snapshots_and_factors(snapshots, series):
     )
     with pytest.raises(ValueError, match="수정계수"):
         load_panel(snapshots, series)
+    series.replace(ADJUST_FACTORS, "AAA", factor_frame([(D0, 1.0)]))
+    with pytest.raises(ValueError, match="종목기본정보"):
+        load_panel(snapshots, series)
+
+
+def test_panel_refuses_days_the_stock_info_does_not_cover(snapshots, series, split_data):
+    uncovered = date(2018, 5, 4)
+    snapshots.write_date(
+        DAILY_CANDLES,
+        uncovered,
+        snapshot_frame(uncovered, [{"symbol": "FLAT", "open": 10, "close": 10}]),
+    )
+    series.replace(ADJUST_FACTORS, "FLAT", factor_frame([(D0, 1.0), (D1, 1.0), (uncovered, 1.0)]))
+    with pytest.raises(ValueError, match="2018-05-04"):
+        load_panel(snapshots, series)
+
+
+def test_panel_marks_non_common_stocks_as_untradable(snapshots, series, split_data):
+    write_stock_info(snapshots, [D0, D1], ["SPLIT"], security_group="부동산투자회사")
+    panel = load_panel(snapshots, series)
+
+    split_row = panel.filter((pl.col("symbol") == "SPLIT") & (pl.col("day") == D0)).row(
+        0, named=True
+    )
+    assert split_row["tradable_stock"] is False
+    flat_row = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == D0)).row(0, named=True)
+    assert flat_row["tradable_stock"] is False
+
+
+def test_panel_marks_symbols_absent_from_stock_info_as_untradable(snapshots, series, split_data):
+    write_stock_info(snapshots, [D0, D1], ["FLAT"])
+    panel = load_panel(snapshots, series)
+
+    split_row = panel.filter((pl.col("symbol") == "SPLIT") & (pl.col("day") == D0)).row(
+        0, named=True
+    )
+    assert split_row["tradable_stock"] is False
+    flat_row = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == D0)).row(0, named=True)
+    assert flat_row["tradable_stock"] is True
 
 
 def test_market_view_respects_cutoff(snapshots, series, split_data):

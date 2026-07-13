@@ -13,6 +13,7 @@ INDICATOR_MINUTE = "indicators_1m"
 INDICATOR_DAILY = "indicators_1d"
 INDEX_DAILY = "index_1d"
 INVESTOR_TRADING = "investor_trading"
+STOCK_INFO = "stock_info"
 DELISTING = "delisting"
 DART_FILINGS = "dart_filings"
 ADJUST_FACTORS = "adjust_factors"
@@ -47,6 +48,18 @@ MARKET_CAP_SCHEMA: dict[str, pl.DataType] = {
     "cap": pl.Float64(),
     "volume": pl.Float64(),
     "value": pl.Float64(),
+    "shares": pl.Float64(),
+}
+
+STOCK_INFO_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "name": pl.Utf8(),
+    "market": pl.Utf8(),
+    "security_group": pl.Utf8(),
+    "share_kind": pl.Utf8(),
+    "section": pl.Utf8(),
+    "listed_on": pl.Date(),
     "shares": pl.Float64(),
 }
 

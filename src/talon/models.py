@@ -32,17 +32,6 @@ class CandlePage(BaseModel):
     next_before: str | None = Field(default=None, alias="nextBefore")
 
 
-class StockInfo(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    symbol: str
-    name: str
-    market: str
-    security_type: str = Field(alias="securityType")
-    is_common_share: bool = Field(alias="isCommonShare")
-    status: str
-
-
 class InvestorFlowRecord(BaseModel):
     day: date
     updated_at: datetime

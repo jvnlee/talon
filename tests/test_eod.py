@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import polars as pl
 import pytest
 
-from conftest import make_candle, utc
+from conftest import make_candle, utc, write_stock_info
 from talon.data.store import (
     CANDLE_SCHEMA,
     DAILY_CANDLES,
@@ -19,6 +19,7 @@ from talon.models import CandlePage, InvestorFlowRecord
 from talon.sources.crosscheck import CrosscheckResult, Discrepancy
 
 DAY = date(2026, 7, 10)
+PREV_DAY = date(2026, 7, 9)
 SATURDAY = date(2026, 7, 11)
 
 
@@ -101,16 +102,13 @@ class FakeToss:
     def investor_trading(self, symbol, **kwargs):
         return [investor_record()]
 
-    def stocks(self, symbols):
-        return []
-
 
 def _blocked_listing(day):
     raise SourceError("krx listing blocked")
 
 
 @pytest.fixture
-def sources(monkeypatch):
+def sources(monkeypatch, snapshots):
     monkeypatch.setattr("talon.ingest.eod.fetch_daily_ohlcv", lambda day, **kw: ohlcv_frame())
     monkeypatch.setattr("talon.ingest.eod.fetch_market_cap", lambda day, **kw: caps_frame())
     monkeypatch.setattr("talon.ingest.eod.fetch_krx_listing", _blocked_listing)
@@ -118,7 +116,8 @@ def sources(monkeypatch):
         "talon.ingest.eod.crosscheck_daily",
         lambda snapshot, day, sample, **kw: CrosscheckResult(checked=len(sample)),
     )
-    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", set)
+    write_stock_info(snapshots, [PREV_DAY], ["005930", "000660"])
 
 
 def run(cfg, cal, state, snapshots, series, alerter, *, toss=None, day=DAY, force=False):
@@ -211,7 +210,8 @@ def test_eod_passes_krx_login_to_pykrx(cfg, cal, state, snapshots, series, alert
         "talon.ingest.eod.crosscheck_daily",
         lambda snapshot, day, sample, **kw: CrosscheckResult(checked=len(sample)),
     )
-    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", set)
+    write_stock_info(snapshots, [PREV_DAY], ["005930", "000660"])
     cfg = cfg.model_copy(update={"krx_id": "tester", "krx_password": "secret"})
 
     summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
@@ -236,7 +236,7 @@ def test_eod_crosscheck_skips_volume_before_settlement(
 
 
 @pytest.fixture
-def listing_only(monkeypatch):
+def listing_only(monkeypatch, snapshots):
     monkeypatch.setattr(
         "talon.ingest.eod.fetch_daily_ohlcv",
         lambda day, **kw: pl.DataFrame(schema=DAILY_SNAPSHOT_SCHEMA),
@@ -244,7 +244,8 @@ def listing_only(monkeypatch):
     monkeypatch.setattr(
         "talon.ingest.eod.fetch_krx_listing", lambda day: (ohlcv_frame(), caps_frame())
     )
-    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", set)
+    write_stock_info(snapshots, [PREV_DAY], ["005930", "000660"])
 
 
 def test_eod_falls_back_to_fdr_listing(
@@ -328,3 +329,30 @@ def test_eod_marketcap_failure_falls_back(
     assert not snapshots.has_date(MARKET_CAP, DAY)
     assert state.latest_universe() is not None
     assert any("시가총액 수집 실패" in text for text in notifier.sent)
+
+
+def test_eod_alerts_when_the_admin_list_is_unavailable(
+    cfg, cal, state, snapshots, series, alerter, notifier, sources, monkeypatch
+):
+    monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", lambda: None)
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+
+    assert summary.status == "ok"
+    assert state.latest_universe().criteria["admin_excluded"] is False
+    assert any("관리종목 목록을 받지 못해" in text for text in notifier.sent)
+
+
+def test_eod_universe_fails_loudly_without_stock_info(
+    cfg, cal, state, snapshots, series, alerter, notifier, sources, monkeypatch
+):
+    monkeypatch.setattr("talon.ingest.universe.latest_stock_info", _no_stock_info)
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+
+    assert summary.status == "degraded"
+    assert summary.universe_size == 0
+    assert "종목기본정보" in summary.steps["universe"]
+    assert any("유니버스 갱신 실패" in text for text in notifier.sent)
+
+
+def _no_stock_info(snapshots, day, *, max_stale_days):
+    raise SourceError("종목기본정보가 없습니다")
