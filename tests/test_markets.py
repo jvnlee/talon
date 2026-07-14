@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 
 from conftest import utc
-from talon.markets.kr import within_session
+from talon.markets.kr import KrxCalendar, second_thursday, within_session
 
 
 def test_known_trading_days(cal):
@@ -51,6 +51,29 @@ def test_ad_hoc_closure_skipped_when_walking_sessions(cal):
         date(2026, 6, 4),
         date(2026, 6, 5),
     ]
+
+
+def test_second_thursday():
+    assert second_thursday(2026, 7) == date(2026, 7, 9)
+    assert second_thursday(2026, 10) == date(2026, 10, 8)
+    assert second_thursday(2018, 5) == date(2018, 5, 10)
+    assert second_thursday(2021, 4) == date(2021, 4, 8)
+
+
+def test_option_expiry_on_trading_day(cal):
+    assert cal.option_expiry_day(2026, 7) == date(2026, 7, 9)
+    assert cal.option_expiry_day(2018, 5) == date(2018, 5, 10)
+
+
+def test_option_expiry_rolls_back_when_closed():
+    closed = KrxCalendar(closures={date(2026, 7, 9): "테스트 휴장"})
+    assert closed.option_expiry_day(2026, 7) == date(2026, 7, 8)
+
+
+def test_option_expiry_days_within_range(cal):
+    days = cal.option_expiry_days(date(2026, 6, 1), date(2026, 8, 31))
+    assert days == {date(2026, 6, 11), date(2026, 7, 9), date(2026, 8, 13)}
+    assert cal.option_expiry_days(date(2026, 7, 10), date(2026, 7, 31)) == set()
 
 
 def test_within_session_bounds(cal):

@@ -8,6 +8,11 @@ CLOSURES_MISSING_FROM_XKRX: dict[date, str] = {
 }
 
 
+def second_thursday(year: int, month: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(3 - first.weekday()) % 7 + 7)
+
+
 class KrxCalendar:
     def __init__(
         self,
@@ -47,6 +52,19 @@ class KrxCalendar:
             for ts in self._cal.sessions_in_range(str(start), str(end))
             if ts.date() not in self._closures
         ]
+
+    def option_expiry_day(self, year: int, month: int) -> date:
+        return self.latest_trading_day(second_thursday(year, month))
+
+    def option_expiry_days(self, start: date, end: date) -> set[date]:
+        days: set[date] = set()
+        year, month = start.year, start.month
+        while (year, month) <= (end.year, end.month):
+            expiry = self.option_expiry_day(year, month)
+            if start <= expiry <= end:
+                days.add(expiry)
+            year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        return days
 
 
 @lru_cache(maxsize=1)
