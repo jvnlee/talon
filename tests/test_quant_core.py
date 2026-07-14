@@ -8,6 +8,7 @@ from talon.quant.core import QuantCore, closed_trades_frame
 from talon.quant.regime import Regime
 from talon.quant.risk import RiskConfig, RiskGate
 from talon.quant.signals import StrategySpec
+from talon.quant.strategies import close_bet_v1
 from talon.quant.universe import LiquidityUniverse
 
 BASE = date(2026, 1, 5)
@@ -259,6 +260,33 @@ def test_universe_gates_entries_but_not_exits():
     assert trade["reason"] == "strategy"
     assert trade["exit_day"] == d(3)
     assert result.stats.open_positions == 0
+
+
+def test_close_bet_buys_the_close_and_sells_the_next_open():
+    rows = [bar(d(i), "AAA", 100.0) for i in range(21)]
+    rows.append(bar(d(21), "AAA", 101.0, close=104.0, high=104.0, low=100.0, volume=3e9))
+    rows.append(bar(d(22), "AAA", 106.0, close=105.0, high=106.5, low=104.5))
+    rows.append(bar(d(23), "AAA", 105.0))
+    panel = build_panel(rows).with_columns(
+        pl.col("close").alias("close_1510"),
+        pl.col("high").alias("high_1510"),
+        pl.col("low").alias("low_1510"),
+        pl.col("volume").alias("volume_1510"),
+        pl.lit(False).alias("option_expiry"),
+    )
+    core = make_core(panel, close_bet_v1())
+    result = run(panel, core)
+
+    trade = result.trades.row(0, named=True)
+    assert result.trades.height == 1
+    assert trade["entry_day"] == d(21)
+    assert trade["exit_day"] == d(22)
+    assert trade["entry_price"] == pytest.approx(104.0)
+    assert trade["exit_price"] == pytest.approx(106.0)
+    assert trade["reason"] == "overnight"
+    assert trade["entry_notional"] == pytest.approx(19_230 * 104.0)
+    assert result.stats.open_positions == 0
+    assert core.trades_by("close_bet_v1") == 1
 
 
 def test_closed_trades_frame_carries_strategy():

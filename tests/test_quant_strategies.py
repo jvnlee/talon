@@ -3,7 +3,10 @@ from datetime import date, timedelta
 import polars as pl
 
 from talon.factors.engine import compute_factors
+from talon.quant.signals import verify_intraday
 from talon.quant.strategies import (
+    CLOSE_BET_V1_GRID,
+    close_bet_v1,
     close_strength,
     default_strategies,
     mean_reversion,
@@ -145,6 +148,88 @@ def test_close_strength_skips_limit_up_close():
 
 def test_default_book_is_empty_pending_redesign():
     assert default_strategies() == []
+
+
+def close_bet_panel(rows, expiry_days=()):
+    panel = build_panel(rows)
+    expiry = (
+        pl.col("day").is_in(list(expiry_days)) if expiry_days else pl.lit(False)
+    ).alias("option_expiry")
+    return panel.with_columns(
+        pl.col("close").alias("close_1510"),
+        pl.col("high").alias("high_1510"),
+        pl.col("low").alias("low_1510"),
+        pl.col("volume").alias("volume_1510"),
+        expiry,
+    )
+
+
+def quiet_history(days=21):
+    return [bar(i, "AAA", 100.0) for i in range(1, days + 1)]
+
+
+def test_close_bet_fires_when_all_three_conditions_hold():
+    spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.4)
+    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=101.0, high=104.0, low=100.0, volume=3000.0)]
+    frame = augment(close_bet_panel(rows), spec)
+
+    quiet = candidates_on(frame, spec, d(21))
+    fired = candidates_on(frame, spec, d(22))
+
+    assert quiet == []
+    assert [c.symbol for c in fired] == ["AAA"]
+    candidate = fired[0]
+    assert candidate.execution == "close_overnight"
+    assert candidate.ref_price == 104.0
+    assert candidate.stop == 104.0 * 0.95
+    assert candidate.target is None
+    assert candidate.score > 0
+
+
+def test_close_bet_requires_volume_multiple():
+    spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.4)
+    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=101.0, high=104.0, low=100.0, volume=1500.0)]
+    frame = augment(close_bet_panel(rows), spec)
+
+    assert candidates_on(frame, spec, d(22)) == []
+
+
+def test_close_bet_rejects_a_long_upper_tail():
+    spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.4)
+    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=101.0, high=110.0, low=100.0, volume=3000.0)]
+    frame = augment(close_bet_panel(rows), spec)
+
+    assert candidates_on(frame, spec, d(22)) == []
+
+
+def test_close_bet_passes_a_rangeless_day():
+    spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.3)
+    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=104.0, high=104.0, low=104.0, volume=3000.0)]
+    frame = augment(close_bet_panel(rows), spec)
+
+    assert [c.symbol for c in candidates_on(frame, spec, d(22))] == ["AAA"]
+
+
+def test_close_bet_sits_out_option_expiry():
+    spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.4)
+    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=101.0, high=104.0, low=100.0, volume=3000.0)]
+    frame = augment(close_bet_panel(rows, expiry_days=(d(22),)), spec)
+
+    assert candidates_on(frame, spec, d(22)) == []
+
+
+def test_close_bet_survives_the_intraday_lookahead_gate():
+    assert verify_intraday([close_bet_v1()]) == []
+
+
+def test_close_bet_grid_is_the_declared_27():
+    assert len(CLOSE_BET_V1_GRID) == 27
+    assert len({tuple(sorted(p.items())) for p in CLOSE_BET_V1_GRID}) == 27
+    assert {p["strength_pct"] for p in CLOSE_BET_V1_GRID} == {2.0, 3.0, 4.0}
+    assert {p["volume_mult"] for p in CLOSE_BET_V1_GRID} == {1.5, 2.0, 2.5}
+    assert {p["tail_max"] for p in CLOSE_BET_V1_GRID} == {0.3, 0.4, 0.5}
+    defaults = {"strength_pct": 3.0, "volume_mult": 2.0, "tail_max": 0.4}
+    assert defaults in CLOSE_BET_V1_GRID
 
 
 def test_liquidity_floor_excludes_thin_names():

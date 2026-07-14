@@ -125,11 +125,44 @@ def close_strength(
     )
 
 
+def close_bet_v1(
+    *,
+    strength_pct: float = 3.0,
+    volume_mult: float = 2.0,
+    tail_max: float = 0.4,
+    assumed_gap_pct: float = 5.0,
+) -> StrategySpec:
+    strength = "close_1510 / prev_close - 1"
+    return StrategySpec(
+        name="close_bet_v1",
+        entry=(
+            f"{strength} >= {strength_pct / 100}",
+            f"volume_1510 >= Ref(Mean(volume_1510, 20), 1) * {volume_mult}",
+            f"high_1510 - close_1510 <= {tail_max} * (high_1510 - low_1510)",
+            "option_expiry == 0",
+        ),
+        score=strength,
+        stop=f"close_1510 * (1 - {assumed_gap_pct / 100})",
+        target=None,
+        ref_price="close_1510",
+        execution="close_overnight",
+        max_hold_days=2,
+    )
+
+
+CLOSE_BET_V1_GRID: tuple[dict[str, float], ...] = tuple(
+    {"strength_pct": strength_pct, "volume_mult": volume_mult, "tail_max": tail_max}
+    for strength_pct in (2.0, 3.0, 4.0)
+    for volume_mult in (1.5, 2.0, 2.5)
+    for tail_max in (0.3, 0.4, 0.5)
+)
+
 STRATEGY_FACTORIES: dict[str, Callable[..., StrategySpec]] = {
     "momo_breakout": momentum_breakout,
     "pullback": pullback,
     "meanrev": mean_reversion,
     "close_strength": close_strength,
+    "close_bet_v1": close_bet_v1,
 }
 
 ACTIVE_STRATEGIES: tuple[str, ...] = ()
