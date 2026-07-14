@@ -271,6 +271,93 @@ def test_sensitivity_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, s
         assert state.trial_count() == 1 + 2 * len(swept)
 
 
+def test_grid_smoke_records_every_declared_combo(tmp_path, monkeypatch, cfg, snapshots, series):
+    import json
+
+    from talon.data.state import StateDB
+    from talon.quant.strategies import CLOSE_BET_V1_GRID
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    _write_flat_daily(snapshots, series)
+
+    runner = CliRunner()
+    out_path = tmp_path / "grid.json"
+    result = runner.invoke(
+        main,
+        ["grid", "--oos-start", "2026-02-01", "--out", str(out_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    json_line = next(line for line in result.output.splitlines() if line.startswith('{"strategy"'))
+    report = json.loads(json_line)
+    assert report["strategy"] == "close_bet_v1"
+    assert len(report["runs"]) == len(CLOSE_BET_V1_GRID)
+    assert report["approx_pct"] == 100.0
+    assert report["best"] is None
+    assert "일봉 근사 비율: 100.0%" in result.output
+    assert out_path.exists()
+
+    with StateDB(cfg.state_path) as state:
+        assert state.trial_count() == len(CLOSE_BET_V1_GRID)
+
+
+def test_grid_refuses_to_touch_the_oos_zone(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["grid", "--end", "2026-03-01", "--oos-start", "2026-02-01"]
+    )
+
+    assert result.exit_code == 1
+    assert "IS 전용" in result.output
+
+
+def test_grid_requires_a_declared_grid(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["grid", "--strategy", "momo_breakout"])
+
+    assert result.exit_code == 1
+    assert "선언된 격자가 없습니다" in result.output
+
+
+def test_gap_stats_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_UNIVERSE_MIN_TRADING_VALUE", "0")
+    _write_flat_daily(snapshots, series)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["gap-stats", "--oos-start", "2026-02-01"])
+
+    assert result.exit_code == 0, result.output
+    json_line = next(line for line in result.output.splitlines() if line.startswith("["))
+    payload = json.loads(json_line)
+    assert payload[0]["strength_floor_pct"] is None
+    assert payload[0]["count"] == 5
+    assert payload[0]["mean_pct"] == 0.0
+    assert "전체 (표본 5건)" in result.output
+
+
+def test_fidelity_needs_exact_1510_days(tmp_path, monkeypatch, cfg, snapshots, series):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    _write_flat_daily(snapshots, series)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["fidelity"])
+
+    assert result.exit_code == 1
+    assert "정확한 15:10" in result.output
+
+
 def test_sensitivity_rejects_unknown_strategy(tmp_path, monkeypatch, cfg):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))

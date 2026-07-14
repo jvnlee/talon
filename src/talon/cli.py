@@ -52,9 +52,9 @@ from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
 from talon.markets.kr import krx_calendar
 from talon.notify.telegram import Alerter, TelegramNotifier
-from talon.quant.core import QuantCore, closed_trades_frame
-from talon.quant.regime import BreadthRegimeFilter
-from talon.quant.risk import interventions_frame
+from talon.quant.core import QuantCore, RegimeAssessor, closed_trades_frame
+from talon.quant.regime import BreadthRegimeFilter, FullExposureRegime
+from talon.quant.risk import RiskConfig, RiskGate, interventions_frame
 from talon.quant.signals import StrategySpec
 from talon.quant.strategies import default_strategies
 from talon.quant.universe import LiquidityUniverse
@@ -404,7 +404,7 @@ def dart_backfill(
     )
 
 
-def _columns_warmup(strategies: list[StrategySpec], regime_filter: BreadthRegimeFilter) -> int:
+def _columns_warmup(strategies: list[StrategySpec], regime_filter: RegimeAssessor) -> int:
     columns: dict[str, str] = {}
     for spec in strategies:
         columns.update(spec.columns())
@@ -421,6 +421,12 @@ def _warmup_start(start: date | None, warmup: int) -> date | None:
 
 def _trading_universe(cfg: TalonSettings) -> LiquidityUniverse:
     return LiquidityUniverse(size=cfg.universe_size, min_value=cfg.universe_min_trading_value)
+
+
+def _gate_for(max_positions: int | None) -> RiskGate | None:
+    if max_positions is None:
+        return None
+    return RiskGate(RiskConfig(max_positions=max_positions))
 
 
 def _selected_strategies(strategy_filter: tuple[str, ...]) -> list[StrategySpec]:
@@ -467,6 +473,8 @@ def _record_trial(
 @click.option("--symbol", "symbols", multiple=True)
 @click.option("--cash", type=float, default=10_000_000.0, show_default=True)
 @click.option("--strategy", "strategy_filter", multiple=True)
+@click.option("--max-positions", type=int, default=None, help="동시 보유 상한 (기본: RiskConfig)")
+@click.option("--regime/--no-regime", "use_regime", default=True, show_default=True)
 @click.option("--out", "out_dir", type=click.Path(path_type=Path), default=None)
 @click.option("--report", "report_path", type=click.Path(path_type=Path), default=None)
 def backtest(
@@ -475,6 +483,8 @@ def backtest(
     symbols: tuple[str, ...],
     cash: float,
     strategy_filter: tuple[str, ...],
+    max_positions: int | None,
+    use_regime: bool,
     out_dir: Path | None,
     report_path: Path | None,
 ) -> None:
@@ -482,7 +492,7 @@ def backtest(
     start = date.fromisoformat(start_text) if start_text else None
     end = date.fromisoformat(end_text) if end_text else None
     strategies = _selected_strategies(strategy_filter)
-    regime_filter = BreadthRegimeFilter()
+    regime_filter: RegimeAssessor = BreadthRegimeFilter() if use_regime else FullExposureRegime()
     load_start = _warmup_start(start, _columns_warmup(strategies, regime_filter))
     with runtime(cfg, toss="skip") as rt:
         panel = load_panel(
@@ -497,6 +507,7 @@ def backtest(
         panel,
         strategies=strategies,
         regime_filter=regime_filter,
+        gate=_gate_for(max_positions),
         universe=_trading_universe(cfg),
     )
     trading_panel = panel if start is None else panel.filter(pl.col("day") >= start)
@@ -535,6 +546,8 @@ def backtest(
 @click.option("--symbol", "symbols", multiple=True)
 @click.option("--strategy", "strategy_filter", multiple=True)
 @click.option("--cash", type=float, default=10_000_000.0, show_default=True)
+@click.option("--max-positions", type=int, default=None, help="동시 보유 상한 (기본: RiskConfig)")
+@click.option("--regime/--no-regime", "use_regime", default=True, show_default=True)
 @click.option("--out", "out_dir", type=click.Path(path_type=Path), default=None)
 def evaluate(
     oos_start_text: str,
@@ -543,6 +556,8 @@ def evaluate(
     symbols: tuple[str, ...],
     strategy_filter: tuple[str, ...],
     cash: float,
+    max_positions: int | None,
+    use_regime: bool,
     out_dir: Path | None,
 ) -> None:
     cfg = load_settings()
@@ -550,7 +565,7 @@ def evaluate(
     start = date.fromisoformat(start_text) if start_text else None
     end = date.fromisoformat(end_text) if end_text else None
     strategies = _selected_strategies(strategy_filter)
-    regime_filter = BreadthRegimeFilter()
+    regime_filter: RegimeAssessor = BreadthRegimeFilter() if use_regime else FullExposureRegime()
     load_start = _warmup_start(start, _columns_warmup(strategies, regime_filter))
     with runtime(cfg, toss="skip") as rt:
         panel = load_panel(
@@ -573,6 +588,7 @@ def evaluate(
                 p,
                 strategies=strategies,
                 regime_filter=regime_filter,
+                gate=_gate_for(max_positions),
                 universe=_trading_universe(cfg),
             ),
             benchmark_daily=kospi,
@@ -598,6 +614,236 @@ def evaluate(
         click.echo(str(out_dir))
     if not report.passed:
         sys.exit(1)
+
+
+@main.command()
+@click.option("--strategy", "strategy_name", default="close_bet_v1", show_default=True)
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD (OOS 시작일 이전만 허용)")
+@click.option("--oos-start", "oos_start_text", default="2024-01-01", show_default=True)
+@click.option("--cash", type=float, default=10_000_000.0, show_default=True)
+@click.option("--max-positions", type=int, default=3, show_default=True)
+@click.option("--out", "out_path", type=click.Path(path_type=Path), default=None)
+def grid(
+    strategy_name: str,
+    start_text: str | None,
+    end_text: str | None,
+    oos_start_text: str,
+    cash: float,
+    max_positions: int,
+    out_path: Path | None,
+) -> None:
+    """선언된 격자 전체를 IS 구간에서 실행하고 시행마다 trials에 기록한다."""
+    from talon.backtest.grid import GridRun, approx_pct, clamp_is_end, describe, run_grid
+    from talon.quant.strategies import STRATEGY_FACTORIES, STRATEGY_GRIDS
+
+    cfg = load_settings()
+    grid_params = STRATEGY_GRIDS.get(strategy_name)
+    if grid_params is None:
+        raise click.ClickException(
+            f"{strategy_name}에는 선언된 격자가 없습니다 (지원: {sorted(STRATEGY_GRIDS)})"
+        )
+    factory = STRATEGY_FACTORIES[strategy_name]
+    oos_start = date.fromisoformat(oos_start_text)
+    start = date.fromisoformat(start_text) if start_text else None
+    try:
+        end = clamp_is_end(date.fromisoformat(end_text) if end_text else None, oos_start)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    regime_filter = FullExposureRegime()
+    warmup = max(
+        _columns_warmup([factory(**params)], regime_filter) for params in grid_params
+    )
+    load_start = _warmup_start(start, warmup)
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=load_start,
+            end=end,
+            symbols=None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
+        )
+    panel = panel.filter(pl.col("day") < oos_start)
+    trading_panel = panel if start is None else panel.filter(pl.col("day") >= start)
+    if trading_panel.is_empty():
+        raise click.ClickException("IS 구간에 거래일이 없습니다")
+
+    def runner(params: dict[str, float]) -> tuple[BacktestStats, pl.Series, int]:
+        spec = factory(**params)
+        core = QuantCore(
+            panel,
+            strategies=[spec],
+            regime_filter=regime_filter,
+            gate=_gate_for(max_positions),
+            universe=_trading_universe(cfg),
+        )
+        result = run_backtest(trading_panel, core, config=EngineConfig(initial_cash=cash))
+        trial = _record_trial(cfg, result.stats, (), [describe(strategy_name, params)])
+        return result.stats, result.equity["equity"], trial
+
+    def trial_sharpes() -> list[float]:
+        with StateDB(cfg.state_path) as state:
+            return state.trial_sharpes()
+
+    def fmt(value: float | None) -> str:
+        return f"{value:.2f}" if value is not None else "N/A"
+
+    def show(run: GridRun) -> None:
+        stats = run.stats
+        pf = f"{stats.profit_factor:.2f}" if stats.profit_factor is not None else "N/A"
+        click.echo(
+            f"[{run.trial}] {run.description} sharpe={fmt(stats.sharpe)} PF={pf} "
+            f"수익률={stats.total_return_pct:.1f}% MDD={stats.mdd_pct:.1f}% "
+            f"트레이드={stats.trades}건"
+        )
+
+    report = run_grid(
+        strategy=strategy_name,
+        grid=grid_params,
+        runner=runner,
+        initial_cash=cash,
+        oos_start=oos_start,
+        panel_approx_pct=approx_pct(trading_panel),
+        trial_sharpes=trial_sharpes,
+        progress=show,
+    )
+    click.echo(report.model_dump_json())
+    click.echo(f"일봉 근사 비율: {report.approx_pct:.1f}% (정확한 15:10 상태는 나머지)")
+    if report.best is not None:
+        click.echo(f"최고 sharpe: {report.best}")
+    if report.deflated is not None:
+        margin = report.deflated.margin
+        click.echo(
+            f"DSR(시도 {report.deflated.trials}회 반영): 일간 sharpe "
+            f"{report.deflated.sharpe_daily:.4f} vs 우연 기대 최대 "
+            f"{report.deflated.expected_max_daily:.4f} → 마진 {margin:+.4f}"
+        )
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report.model_dump_json(indent=2))
+        click.echo(str(out_path))
+
+
+@main.command("gap-stats")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD (OOS 시작일 이전만 허용)")
+@click.option("--oos-start", "oos_start_text", default="2024-01-01", show_default=True)
+def gap_stats(start_text: str | None, end_text: str | None, oos_start_text: str) -> None:
+    """IS 구간 익일 갭(오늘 종가 → 내일 시가) 하위 분포를 잰다 — 사이징 가정 갭의 근거."""
+    from talon.backtest.gaps import overnight_gap_stats
+    from talon.backtest.grid import clamp_is_end
+
+    cfg = load_settings()
+    oos_start = date.fromisoformat(oos_start_text)
+    start = date.fromisoformat(start_text) if start_text else None
+    try:
+        end = clamp_is_end(date.fromisoformat(end_text) if end_text else None, oos_start)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=start,
+            end=end,
+            symbols=None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
+        )
+    panel = panel.filter(pl.col("day") < oos_start)
+    results = [
+        overnight_gap_stats(
+            panel,
+            universe_size=cfg.universe_size,
+            min_value=cfg.universe_min_trading_value,
+            strength_floor_pct=floor,
+        )
+        for floor in (None, 2.0, 3.0, 4.0)
+    ]
+    for stats in results:
+        label = (
+            "전체"
+            if stats.strength_floor_pct is None
+            else f"당일 +{stats.strength_floor_pct:g}% 이상"
+        )
+        quantiles = " ".join(
+            f"{name}={value:+.2f}%" for name, value in stats.quantiles_pct.items()
+        )
+        click.echo(f"{label} (표본 {stats.count:,}건): 평균 {stats.mean_pct:+.2f}% {quantiles}")
+    click.echo(json.dumps([stats.model_dump() for stats in results], ensure_ascii=False))
+
+
+@main.command()
+@click.option("--strategy", "strategy_name", default="close_bet_v1", show_default=True)
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--out", "out_path", type=click.Path(path_type=Path), default=None)
+def fidelity(
+    strategy_name: str,
+    start_text: str | None,
+    end_text: str | None,
+    out_path: Path | None,
+) -> None:
+    """정확한 15:10 패널로 일봉 근사의 오차를 잰다 — 선택 겹침·가격 오차만, 수익률은 안 본다."""
+    from talon.backtest.fidelity import measure_fidelity
+    from talon.backtest.grid import describe
+    from talon.quant.strategies import STRATEGY_FACTORIES, STRATEGY_GRIDS
+
+    cfg = load_settings()
+    grid_params = STRATEGY_GRIDS.get(strategy_name)
+    if grid_params is None:
+        raise click.ClickException(
+            f"{strategy_name}에는 선언된 격자가 없습니다 (지원: {sorted(STRATEGY_GRIDS)})"
+        )
+    factory = STRATEGY_FACTORIES[strategy_name]
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=start,
+            end=end,
+            symbols=None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
+        )
+    specs = {describe(strategy_name, params): factory(**params) for params in grid_params}
+    try:
+        report = measure_fidelity(
+            panel,
+            specs,
+            universe_size=cfg.universe_size,
+            min_value=cfg.universe_min_trading_value,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        f"정확한 날 {report.exact_days}일 (조건2 창이 다 정확해지는 날은 {report.settled_days}일), "
+        f"유니버스 행 기준 정확 비율 {report.universe_exact_row_pct:.1f}%"
+    )
+    click.echo(
+        "15:10가→종가 오차(절대값): "
+        + " ".join(f"{k}={v:.2f}%" for k, v in report.price_error_abs_pct.items())
+    )
+    click.echo(
+        "15:10까지 거래량/하루치 비율: "
+        + " ".join(f"{k}={v:.2f}" for k, v in report.volume_ratio.items())
+    )
+    for name, overlap in report.overlaps.items():
+        settled = report.settled_overlaps[name]
+        jaccard = f"{overlap.mean_jaccard:.2f}" if overlap.mean_jaccard is not None else "N/A"
+        settled_jaccard = (
+            f"{settled.mean_jaccard:.2f}" if settled.mean_jaccard is not None else "N/A"
+        )
+        click.echo(
+            f"{name}: 선택 겹침 {jaccard} (정확 {overlap.exact_picks}·근사 "
+            f"{overlap.approx_picks}·공통 {overlap.common_picks}) | 안정 구간 {settled_jaccard}"
+        )
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report.model_dump_json(indent=2))
+        click.echo(str(out_path))
 
 
 def _numeric_defaults(factory: Callable[..., StrategySpec]) -> dict[str, int | float]:

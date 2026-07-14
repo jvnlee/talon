@@ -168,9 +168,13 @@ def quiet_history(days=21):
     return [bar(i, "AAA", 100.0) for i in range(1, days + 1)]
 
 
+def surge_bar(high=104.0, low=100.0, volume=3000.0, open_=101.0):
+    return bar(22, "AAA", 104.0, open_=open_, high=high, low=low, volume=volume)
+
+
 def test_close_bet_fires_when_all_three_conditions_hold():
     spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.4)
-    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=101.0, high=104.0, low=100.0, volume=3000.0)]
+    rows = [*quiet_history(), surge_bar()]
     frame = augment(close_bet_panel(rows), spec)
 
     quiet = candidates_on(frame, spec, d(21))
@@ -188,7 +192,7 @@ def test_close_bet_fires_when_all_three_conditions_hold():
 
 def test_close_bet_requires_volume_multiple():
     spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.4)
-    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=101.0, high=104.0, low=100.0, volume=1500.0)]
+    rows = [*quiet_history(), surge_bar(volume=1500.0)]
     frame = augment(close_bet_panel(rows), spec)
 
     assert candidates_on(frame, spec, d(22)) == []
@@ -196,7 +200,7 @@ def test_close_bet_requires_volume_multiple():
 
 def test_close_bet_rejects_a_long_upper_tail():
     spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.4)
-    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=101.0, high=110.0, low=100.0, volume=3000.0)]
+    rows = [*quiet_history(), surge_bar(high=110.0)]
     frame = augment(close_bet_panel(rows), spec)
 
     assert candidates_on(frame, spec, d(22)) == []
@@ -204,7 +208,7 @@ def test_close_bet_rejects_a_long_upper_tail():
 
 def test_close_bet_passes_a_rangeless_day():
     spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.3)
-    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=104.0, high=104.0, low=104.0, volume=3000.0)]
+    rows = [*quiet_history(), surge_bar(high=104.0, low=104.0, open_=104.0)]
     frame = augment(close_bet_panel(rows), spec)
 
     assert [c.symbol for c in candidates_on(frame, spec, d(22))] == ["AAA"]
@@ -212,7 +216,7 @@ def test_close_bet_passes_a_rangeless_day():
 
 def test_close_bet_sits_out_option_expiry():
     spec = close_bet_v1(strength_pct=3.0, volume_mult=2.0, tail_max=0.4)
-    rows = [*quiet_history(), bar(22, "AAA", 104.0, open_=101.0, high=104.0, low=100.0, volume=3000.0)]
+    rows = [*quiet_history(), surge_bar()]
     frame = augment(close_bet_panel(rows, expiry_days=(d(22),)), spec)
 
     assert candidates_on(frame, spec, d(22)) == []

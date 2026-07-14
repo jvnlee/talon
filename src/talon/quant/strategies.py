@@ -165,6 +165,10 @@ STRATEGY_FACTORIES: dict[str, Callable[..., StrategySpec]] = {
     "close_bet_v1": close_bet_v1,
 }
 
+STRATEGY_GRIDS: dict[str, tuple[dict[str, float], ...]] = {
+    "close_bet_v1": CLOSE_BET_V1_GRID,
+}
+
 ACTIVE_STRATEGIES: tuple[str, ...] = ()
 
 
