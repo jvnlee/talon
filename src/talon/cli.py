@@ -47,6 +47,7 @@ from talon.ingest.collect import bootstrap_universe, run_collect
 from talon.ingest.eod import run_eod
 from talon.ingest.history import backfill_daily
 from talon.ingest.intraday import SLOTS, run_intraday
+from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
 from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
 from talon.markets.kr import krx_calendar
@@ -196,6 +197,31 @@ def intraday(slot: str, day_text: str | None, force: bool) -> None:
             )
     click.echo(summary.model_dump_json())
     if summary.status in {"error", "data-not-ready", "no-credentials"}:
+        sys.exit(1)
+
+
+@main.command("backfill-minutes")
+@click.option("--pages", type=int, default=DEFAULT_MAX_PAGES, show_default=True)
+@click.option("--symbol", "symbols", multiple=True)
+def backfill_minutes_command(pages: int, symbols: tuple[str, ...]) -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "backfill-minutes.lock") as acquired:
+        if not acquired:
+            click.echo("backfill-minutes가 이미 실행 중입니다")
+            return
+        with runtime(cfg) as rt:
+            assert rt.client is not None
+            targets = list(symbols)
+            if not targets:
+                snapshot = rt.state.latest_universe()
+                targets = snapshot.symbols if snapshot is not None else []
+            if not targets:
+                raise click.ClickException(
+                    "유니버스 스냅샷이 없습니다 — talon collect 를 먼저 돌리십시오"
+                )
+            summary = backfill_minutes(rt.series, rt.client, targets, max_pages=pages)
+    click.echo(summary.model_dump_json())
+    if summary.status != "ok":
         sys.exit(1)
 
 

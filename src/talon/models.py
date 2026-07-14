@@ -118,6 +118,14 @@ class IntradaySummary(BaseModel):
     rows: int = 0
 
 
+class MinuteBackfillSummary(BaseModel):
+    status: str
+    symbols: int = 0
+    rows: int = 0
+    oldest: datetime | None = None
+    failures: list[str] = []
+
+
 class BackfillSummary(BaseModel):
     status: str
     sessions: int = 0

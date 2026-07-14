@@ -147,6 +147,12 @@ class ParquetStore:
             return None
         return pl.scan_parquet(path).select(pl.col(column).max()).collect().item()
 
+    def first_value(self, dataset: str, name: str, column: str = "ts") -> datetime | None:
+        path = self.path(dataset, name)
+        if not path.exists():
+            return None
+        return pl.scan_parquet(path).select(pl.col(column).min()).collect().item()
+
     def names(self, dataset: str) -> list[str]:
         directory = self.root / dataset
         if not directory.exists():
