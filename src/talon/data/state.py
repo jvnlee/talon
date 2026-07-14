@@ -42,9 +42,18 @@ CREATE TABLE IF NOT EXISTS trials (
     strategies TEXT NOT NULL DEFAULT '[]',
     sharpe_daily REAL,
     trades INTEGER NOT NULL DEFAULT 0,
-    total_return_pct REAL
+    total_return_pct REAL,
+    cycle TEXT NOT NULL DEFAULT 'cycle-0'
+);
+CREATE TABLE IF NOT EXISTS trial_cycles (
+    name TEXT PRIMARY KEY,
+    opened_at TEXT NOT NULL,
+    closed_at TEXT,
+    note TEXT NOT NULL DEFAULT ''
 );
 """
+
+ARCHIVE_CYCLE = "cycle-0"
 
 
 def _dt(value: str) -> datetime:
@@ -58,6 +67,14 @@ class StateDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(trials)")}
+        if "cycle" not in columns:
+            self._conn.execute(
+                f"ALTER TABLE trials ADD COLUMN cycle TEXT NOT NULL DEFAULT '{ARCHIVE_CYCLE}'"
+            )
 
     def close(self) -> None:
         self._conn.close()
@@ -139,6 +156,33 @@ class StateDB:
             (key, now_utc().isoformat()),
         )
 
+    def active_cycle(self) -> str:
+        row = self._conn.execute(
+            "SELECT name FROM trial_cycles WHERE closed_at IS NULL ORDER BY opened_at DESC LIMIT 1"
+        ).fetchone()
+        return str(row[0]) if row else ARCHIVE_CYCLE
+
+    def open_cycle(self, name: str, *, note: str = "") -> None:
+        if not name.strip():
+            raise ValueError("사이클 이름이 비었습니다")
+        existing = self._conn.execute(
+            "SELECT 1 FROM trial_cycles WHERE name = ?", (name,)
+        ).fetchone()
+        if existing:
+            raise ValueError(f"이미 있는 사이클입니다: {name}")
+        now = now_utc().isoformat()
+        self._conn.execute("UPDATE trial_cycles SET closed_at = ? WHERE closed_at IS NULL", (now,))
+        self._conn.execute(
+            "INSERT INTO trial_cycles (name, opened_at, closed_at, note) VALUES (?, ?, NULL, ?)",
+            (name, now, note),
+        )
+
+    def cycle_counts(self) -> dict[str, int]:
+        rows = self._conn.execute(
+            "SELECT cycle, COUNT(*) FROM trials GROUP BY cycle ORDER BY cycle"
+        ).fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
+
     def record_trial(
         self,
         *,
@@ -152,8 +196,9 @@ class StateDB:
     ) -> int:
         cursor = self._conn.execute(
             "INSERT INTO trials "
-            "(ts, start_day, end_day, symbols, strategies, sharpe_daily, trades, total_return_pct) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(ts, start_day, end_day, symbols, strategies, sharpe_daily, trades, "
+            "total_return_pct, cycle) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 now_utc().isoformat(),
                 start.isoformat() if start else None,
@@ -163,17 +208,22 @@ class StateDB:
                 sharpe_daily,
                 trades,
                 total_return_pct,
+                self.active_cycle(),
             ),
         )
         return int(cursor.lastrowid or 0)
 
     def trial_count(self) -> int:
-        row = self._conn.execute("SELECT COUNT(*) FROM trials").fetchone()
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM trials WHERE cycle = ?", (self.active_cycle(),)
+        ).fetchone()
         return int(row[0])
 
     def trial_sharpes(self) -> list[float]:
         rows = self._conn.execute(
-            "SELECT sharpe_daily FROM trials WHERE sharpe_daily IS NOT NULL ORDER BY id"
+            "SELECT sharpe_daily FROM trials "
+            "WHERE cycle = ? AND sharpe_daily IS NOT NULL ORDER BY id",
+            (self.active_cycle(),),
         ).fetchall()
         return [float(row[0]) for row in rows]
 

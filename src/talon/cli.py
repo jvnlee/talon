@@ -200,6 +200,41 @@ def intraday(slot: str, day_text: str | None, force: bool) -> None:
         sys.exit(1)
 
 
+@main.group()
+def trials() -> None:
+    pass
+
+
+@trials.command("show")
+def trials_show() -> None:
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        payload = {
+            "active_cycle": rt.state.active_cycle(),
+            "active_count": rt.state.trial_count(),
+            "by_cycle": rt.state.cycle_counts(),
+        }
+    click.echo(json.dumps(payload, ensure_ascii=False))
+
+
+@trials.command("open")
+@click.option("--name", required=True)
+@click.option("--note", default="")
+def trials_open(name: str, note: str) -> None:
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        try:
+            rt.state.open_cycle(name, note=note)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        payload = {
+            "active_cycle": rt.state.active_cycle(),
+            "active_count": rt.state.trial_count(),
+            "by_cycle": rt.state.cycle_counts(),
+        }
+    click.echo(json.dumps(payload, ensure_ascii=False))
+
+
 @main.command("backfill-minutes")
 @click.option("--pages", type=int, default=DEFAULT_MAX_PAGES, show_default=True)
 @click.option("--symbol", "symbols", multiple=True)
