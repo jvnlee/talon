@@ -1,14 +1,22 @@
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from talon.backtest.engine import EngineConfig, Order
-from talon.backtest.lookahead import pick_cuts, verify_factors, verify_replay
+from talon.backtest.lookahead import (
+    pick_cuts,
+    verify_factors,
+    verify_intraday,
+    verify_replay,
+)
+from talon.errors import LookaheadError
 from talon.factors.ops import REGISTRY, TIME_SERIES, Op
 from talon.quant.core import QuantCore
 from talon.quant.regime import Regime
 from talon.quant.risk import RiskGate
 from talon.quant.signals import StrategySpec
+from talon.quant.strategies import close_strength
 
 BASE = date(2026, 1, 5)
 
@@ -200,3 +208,83 @@ def test_replay_skips_symbols_without_bars_around_cut():
 
     violations = verify_replay(panel, quant_core_builder, [d(4)], config=NO_SLIP, costs=ZeroCost())
     assert violations == []
+
+
+def spec(entry, score="1", execution="close_overnight"):
+    return StrategySpec(
+        name="probe",
+        entry=entry,
+        score=score,
+        stop="close * 0.95",
+        target="close * 1.05",
+        execution=execution,
+    )
+
+
+def test_intraday_flags_same_day_close_and_volume_in_close_overnight():
+    violations = verify_intraday(
+        [spec(("close >= high", "volume >= Ref(Mean(volume, 20), 1) * 2.5"))]
+    )
+
+    assert {(v.part, v.column) for v in violations} == {
+        ("entry[0]", "close"),
+        ("entry[0]", "high"),
+        ("entry[1]", "volume"),
+    }
+
+
+def test_intraday_allows_lagged_and_open_references():
+    violations = verify_intraday(
+        [
+            spec(
+                (
+                    "Ref(close, 1) / Ref(close, 2) - 1 >= 0.03",
+                    "Ref(Mean(volume, 20), 1) >= 1e6",
+                    "open / prev_close - 1 < 0.05",
+                ),
+                score="Ref(close, 1) / Ref(close, 2)",
+            )
+        ]
+    )
+
+    assert violations == []
+
+
+def test_intraday_flags_rolling_window_that_includes_today():
+    violations = verify_intraday([spec(("Mean(value, 20) >= 1e9",))])
+
+    assert [(v.part, v.column) for v in violations] == [("entry[0]", "value")]
+
+
+def test_intraday_flags_the_score_expression():
+    violations = verify_intraday([spec(("Ref(close, 1) > 0",), score="close / prev_close - 1")])
+
+    assert [(v.part, v.column) for v in violations] == [("score", "close")]
+
+
+def test_intraday_ignores_open_execution_strategies():
+    violations = verify_intraday([spec(("close >= high",), execution="open")])
+
+    assert violations == []
+
+
+def test_intraday_catches_the_strategy_that_motivated_it():
+    violations = verify_intraday([close_strength()])
+
+    assert {v.column for v in violations} == {"close", "high", "volume", "value"}
+    assert {v.part for v in violations} >= {"entry[1]", "entry[2]", "score"}
+
+
+def test_quant_core_refuses_a_close_bet_that_reads_today():
+    panel = wavy_panel(days=30)
+
+    with pytest.raises(LookaheadError, match="ADR 0013"):
+        QuantCore(panel, strategies=[spec(("close >= high",))])
+
+
+def test_quant_core_accepts_a_close_bet_on_completed_data():
+    panel = wavy_panel(days=30)
+
+    core = QuantCore(panel, strategies=[spec(("Ref(close, 1) > Ref(close, 2)",))])
+
+    assert [s.name for s in core.strategies] == ["probe"]

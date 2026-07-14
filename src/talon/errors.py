@@ -12,3 +12,7 @@ class SchemaDriftError(SourceError):
 
 class FactorExpressionError(TalonError):
     pass
+
+
+class LookaheadError(TalonError):
+    pass

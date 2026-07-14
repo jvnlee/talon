@@ -103,7 +103,7 @@ class _Compiler:
             expr, warmup = self.compile(arg)
             child_exprs.append(expr)
             child_warmups.append(warmup)
-        params = [self._int_param(op, arg) for arg in node.args[op.expr_args :]]
+        params = [_int_param(op, arg) for arg in node.args[op.expr_args :]]
         built = op.build(child_exprs, params)
         warmup = op.warmup(child_warmups, params)
         if op.kind == TIME_SERIES:
@@ -111,21 +111,6 @@ class _Compiler:
         if op.kind == CROSS_SECTION:
             return self._materialize(built.over("day")), warmup
         return built, warmup
-
-    def _int_param(self, op: Op, arg: Node) -> int:
-        sign = 1
-        if isinstance(arg, Unary) and arg.op == "-":
-            sign = -1
-            arg = arg.operand
-        if not isinstance(arg, Const) or not float(arg.value).is_integer():
-            raise FactorExpressionError(f"{op.name}의 윈도/시차 인자는 정수 상수여야 합니다")
-        value = sign * int(arg.value)
-        if value < op.min_int:
-            raise FactorExpressionError(
-                f"{op.name}의 정수 인자는 {op.min_int} 이상이어야 합니다 (받음: {value}) — "
-                "음수 시차는 미래 참조라 금지됩니다"
-            )
-        return value
 
     def _materialize(self, expr: pl.Expr) -> pl.Expr:
         name = f"_fx{len(self.stages)}"
@@ -157,3 +142,56 @@ def compute_factors(
 def warmup_periods(factors: dict[str, str], feature_columns: set[str]) -> dict[str, int]:
     compiler = _Compiler(feature_columns)
     return {name: compiler.compile(parse(text))[1] for name, text in factors.items()}
+
+
+def _int_param(op: Op, arg: Node) -> int:
+    sign = 1
+    if isinstance(arg, Unary) and arg.op == "-":
+        sign = -1
+        arg = arg.operand
+    if not isinstance(arg, Const) or not float(arg.value).is_integer():
+        raise FactorExpressionError(f"{op.name}의 윈도/시차 인자는 정수 상수여야 합니다")
+    value = sign * int(arg.value)
+    if value < op.min_int:
+        raise FactorExpressionError(
+            f"{op.name}의 정수 인자는 {op.min_int} 이상이어야 합니다 (받음: {value}) — "
+            "음수 시차는 미래 참조라 금지됩니다"
+        )
+    return value
+
+
+def column_min_lags(text: str) -> dict[str, int]:
+    lags: dict[str, int] = {}
+    _collect_lags(parse(text), 0, lags)
+    return lags
+
+
+def _collect_lags(node: Node, lag: int, lags: dict[str, int]) -> None:
+    if isinstance(node, Const):
+        return
+    if isinstance(node, Column):
+        seen = lags.get(node.name)
+        if seen is None or lag < seen:
+            lags[node.name] = lag
+        return
+    if isinstance(node, Unary):
+        _collect_lags(node.operand, lag, lags)
+        return
+    if isinstance(node, Binary | Compare):
+        _collect_lags(node.left, lag, lags)
+        _collect_lags(node.right, lag, lags)
+        return
+    assert isinstance(node, Func)
+    op = REGISTRY.get(node.name)
+    if op is None:
+        raise FactorExpressionError(
+            f"알 수 없는 함수: {node.name}" + _suggest(node.name, sorted(REGISTRY))
+        )
+    expected = op.expr_args + op.int_args
+    if len(node.args) != expected:
+        raise FactorExpressionError(
+            f"{op.name}은(는) 인자 {expected}개가 필요합니다 (받음: {len(node.args)})"
+        )
+    shift = _int_param(op, node.args[op.expr_args]) if op.name == "Ref" else 0
+    for arg in node.args[: op.expr_args]:
+        _collect_lags(arg, lag + shift, lags)

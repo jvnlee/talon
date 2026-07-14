@@ -15,6 +15,17 @@ from talon.backtest.engine import (
     run_backtest,
 )
 from talon.factors.engine import compute_factors
+from talon.quant.signals import IntradayViolation, verify_intraday
+
+__all__ = [
+    "FactorViolation",
+    "IntradayViolation",
+    "ReplayViolation",
+    "pick_cuts",
+    "verify_factors",
+    "verify_intraday",
+    "verify_replay",
+]
 
 TRADE_KEY = ("entry_day", "symbol", "exit_day")
 

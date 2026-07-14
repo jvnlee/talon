@@ -4,10 +4,11 @@ import polars as pl
 
 from talon.backtest.data import MarketView
 from talon.backtest.engine import ClosedTrade, Order, PortfolioView
+from talon.errors import LookaheadError
 from talon.factors.engine import compute_factors
 from talon.quant.regime import BreadthRegimeFilter, Regime
 from talon.quant.risk import Intervention, RiskGate
-from talon.quant.signals import Signal, StrategySpec
+from talon.quant.signals import Signal, StrategySpec, verify_intraday
 from talon.quant.strategies import default_strategies
 from talon.quant.universe import LiquidityUniverse
 
@@ -62,6 +63,15 @@ class QuantCore:
         names = [spec.name for spec in self.strategies]
         if len(set(names)) != len(names):
             raise ValueError(f"전략 이름이 중복됩니다: {names}")
+        violations = verify_intraday(self.strategies)
+        if violations:
+            detail = "\n".join(f"  - {violation.describe()}" for violation in violations)
+            raise LookaheadError(
+                "종가 체결 전략이 15:10 결정 시점에 존재하지 않는 당일 데이터를 참조합니다 "
+                f"(ADR 0013):\n{detail}\n"
+                "당일 close/high/low/volume/value는 Ref(…, 1) 이상으로 지연시키거나 "
+                "open/prev_close로 바꾸십시오."
+            )
         self.regime_filter: RegimeAssessor = (
             regime_filter if regime_filter is not None else BreadthRegimeFilter()
         )

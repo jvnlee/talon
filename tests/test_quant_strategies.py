@@ -143,8 +143,8 @@ def test_close_strength_skips_limit_up_close():
     assert candidates_on(frame, spec, d(25)) == []
 
 
-def test_default_book_is_close_strength_only():
-    assert [spec.name for spec in default_strategies()] == ["close_strength"]
+def test_default_book_is_empty_pending_redesign():
+    assert default_strategies() == []
 
 
 def test_liquidity_floor_excludes_thin_names():

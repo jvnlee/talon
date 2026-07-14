@@ -132,7 +132,7 @@ STRATEGY_FACTORIES: dict[str, Callable[..., StrategySpec]] = {
     "close_strength": close_strength,
 }
 
-ACTIVE_STRATEGIES: tuple[str, ...] = ("close_strength",)
+ACTIVE_STRATEGIES: tuple[str, ...] = ()
 
 
 def default_strategies() -> list[StrategySpec]:

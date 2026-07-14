@@ -94,7 +94,10 @@ def test_backtest_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
     runner = CliRunner()
     out_dir = tmp_path / "bt"
     report = tmp_path / "tearsheet.html"
-    result = runner.invoke(main, ["backtest", "--out", str(out_dir), "--report", str(report)])
+    result = runner.invoke(
+        main,
+        ["backtest", "--strategy", "momo_breakout", "--out", str(out_dir), "--report", str(report)],
+    )
 
     assert result.exit_code == 0, result.output
     stats = json.loads(result.output.splitlines()[0])
@@ -158,7 +161,18 @@ def test_evaluate_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, seri
 
     runner = CliRunner()
     out_dir = tmp_path / "gate1"
-    result = runner.invoke(main, ["evaluate", "--oos-start", "2026-01-08", "--out", str(out_dir)])
+    result = runner.invoke(
+        main,
+        [
+            "evaluate",
+            "--strategy",
+            "momo_breakout",
+            "--oos-start",
+            "2026-01-08",
+            "--out",
+            str(out_dir),
+        ],
+    )
 
     assert result.exit_code == 1, result.output
     report = json.loads(result.output.splitlines()[0])
@@ -183,7 +197,9 @@ def test_evaluate_requires_index_data(tmp_path, monkeypatch, cfg, snapshots, ser
     _write_flat_daily(snapshots, series)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["evaluate", "--oos-start", "2026-01-08"])
+    result = runner.invoke(
+        main, ["evaluate", "--strategy", "momo_breakout", "--oos-start", "2026-01-08"]
+    )
 
     assert result.exit_code == 1
     assert "index backfill" in result.output
@@ -274,7 +290,7 @@ def test_lookahead_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, ser
     _write_flat_daily(snapshots, series)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["lookahead", "--cuts", "2"])
+    result = runner.invoke(main, ["lookahead", "--strategy", "momo_breakout", "--cuts", "2"])
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output.splitlines()[0])

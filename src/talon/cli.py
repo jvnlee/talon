@@ -20,7 +20,12 @@ from talon.backtest.crosscheck import run_crosscheck
 from talon.backtest.data import PANEL_COLUMNS, load_panel
 from talon.backtest.engine import EngineConfig, run_backtest
 from talon.backtest.evaluate import evaluate_gate1
-from talon.backtest.lookahead import pick_cuts, verify_factors, verify_replay
+from talon.backtest.lookahead import (
+    pick_cuts,
+    verify_factors,
+    verify_intraday,
+    verify_replay,
+)
 from talon.backtest.metrics import TRADING_DAYS_PER_YEAR, BacktestStats
 from talon.backtest.report import write_tearsheet
 from talon.backtest.sensitivity import SweepRun, neighbors, run_sweep
@@ -333,7 +338,13 @@ def _selected_strategies(strategy_filter: tuple[str, ...]) -> list[StrategySpec]
     from talon.quant.strategies import STRATEGY_FACTORIES
 
     if not strategy_filter:
-        return default_strategies()
+        specs = default_strategies()
+        if not specs:
+            raise click.ClickException(
+                "활성 전략이 없습니다 — Phase 2 재설계 대기 중입니다 (ADR 0013). "
+                f"--strategy 로 명시하십시오 (지원: {sorted(STRATEGY_FACTORIES)})"
+            )
+        return specs
     unknown = sorted(set(strategy_filter) - set(STRATEGY_FACTORIES))
     if unknown:
         raise click.ClickException(
@@ -433,6 +444,7 @@ def backtest(
 @click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
 @click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
 @click.option("--symbol", "symbols", multiple=True)
+@click.option("--strategy", "strategy_filter", multiple=True)
 @click.option("--cash", type=float, default=10_000_000.0, show_default=True)
 @click.option("--out", "out_dir", type=click.Path(path_type=Path), default=None)
 def evaluate(
@@ -440,6 +452,7 @@ def evaluate(
     start_text: str | None,
     end_text: str | None,
     symbols: tuple[str, ...],
+    strategy_filter: tuple[str, ...],
     cash: float,
     out_dir: Path | None,
 ) -> None:
@@ -447,7 +460,7 @@ def evaluate(
     oos_start = date.fromisoformat(oos_start_text)
     start = date.fromisoformat(start_text) if start_text else None
     end = date.fromisoformat(end_text) if end_text else None
-    strategies = default_strategies()
+    strategies = _selected_strategies(strategy_filter)
     regime_filter = BreadthRegimeFilter()
     load_start = _warmup_start(start, _columns_warmup(strategies, regime_filter))
     with runtime(cfg, toss="skip") as rt:
@@ -626,18 +639,34 @@ def sensitivity(
 @click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
 @click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
 @click.option("--symbol", "symbols", multiple=True)
+@click.option("--strategy", "strategy_filter", multiple=True)
 @click.option("--cuts", type=int, default=3, show_default=True)
 def lookahead(
     start_text: str | None,
     end_text: str | None,
     symbols: tuple[str, ...],
+    strategy_filter: tuple[str, ...],
     cuts: int,
 ) -> None:
     cfg = load_settings()
     start = date.fromisoformat(start_text) if start_text else None
     end = date.fromisoformat(end_text) if end_text else None
+    specs = _selected_strategies(strategy_filter)
+    intraday_violations = verify_intraday(specs)
+    if intraday_violations:
+        click.echo(
+            json.dumps(
+                {
+                    "status": "lookahead",
+                    "intraday_violations": len(intraday_violations),
+                    "intraday_examples": [v.describe() for v in intraday_violations[:5]],
+                },
+                ensure_ascii=False,
+            )
+        )
+        sys.exit(1)
     columns: dict[str, str] = {}
-    for spec in default_strategies():
+    for spec in specs:
         columns.update(spec.columns())
     columns.update(BreadthRegimeFilter().columns())
     with runtime(cfg, toss="skip") as rt:
@@ -655,7 +684,7 @@ def lookahead(
     factor_violations = verify_factors(panel, columns, cut_days)
     replay_violations = verify_replay(
         panel,
-        lambda p: QuantCore(p, strategies=default_strategies()),
+        lambda p: QuantCore(p, strategies=specs),
         cut_days,
     )
     payload: dict[str, object] = {
@@ -663,6 +692,7 @@ def lookahead(
         "cuts": [day.isoformat() for day in cut_days],
         "factor_violations": len(factor_violations),
         "replay_violations": len(replay_violations),
+        "intraday_violations": 0,
     }
     if factor_violations:
         payload["factor_examples"] = [

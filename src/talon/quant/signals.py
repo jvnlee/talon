@@ -1,8 +1,14 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import polars as pl
 
+from talon.factors.engine import column_min_lags
+
 EXECUTION_MODES = ("open", "close_overnight")
+
+INTRADAY_EXECUTIONS = frozenset({"close_overnight"})
+FORMING_COLUMNS = frozenset({"close", "high", "low", "volume", "value", "raw_close"})
 
 
 @dataclass(frozen=True)
@@ -88,3 +94,38 @@ class StrategySpec:
         if rows.is_empty():
             return False
         return rows.get_column(self._column("exit")).item() is True
+
+    def decision_columns(self) -> dict[str, str]:
+        parts = {f"entry[{index}]": text for index, text in enumerate(self.entry)}
+        parts["score"] = self.score
+        return parts
+
+
+@dataclass(frozen=True)
+class IntradayViolation:
+    strategy: str
+    part: str
+    column: str
+    expression: str
+
+    def describe(self) -> str:
+        return f"{self.strategy}.{self.part} 당일 {self.column} 참조: {self.expression}"
+
+
+def verify_intraday(specs: Sequence[StrategySpec]) -> list[IntradayViolation]:
+    violations: list[IntradayViolation] = []
+    for spec in specs:
+        if spec.execution not in INTRADAY_EXECUTIONS:
+            continue
+        for part, text in spec.decision_columns().items():
+            for column, lag in sorted(column_min_lags(text).items()):
+                if lag == 0 and column in FORMING_COLUMNS:
+                    violations.append(
+                        IntradayViolation(
+                            strategy=spec.name,
+                            part=part,
+                            column=column,
+                            expression=text,
+                        )
+                    )
+    return violations
