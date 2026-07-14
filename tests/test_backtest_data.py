@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime, time
 
 import polars as pl
 import pytest
@@ -6,7 +6,15 @@ import pytest
 from conftest import stock_info_frame, write_stock_info
 from talon.backtest.data import MarketView, load_panel
 from talon.data.adjust import FACTOR_SCHEMA
-from talon.data.store import ADJUST_FACTORS, DAILY_CANDLES, DAILY_SNAPSHOT_SCHEMA, STOCK_INFO
+from talon.data.store import (
+    ADJUST_FACTORS,
+    CANDLE_SCHEMA,
+    DAILY_CANDLES,
+    DAILY_SNAPSHOT_SCHEMA,
+    MINUTE_CANDLES,
+    STOCK_INFO,
+)
+from talon.timeutil import KST
 
 D0 = date(2018, 5, 2)
 D1 = date(2018, 5, 3)
@@ -33,6 +41,22 @@ def factor_frame(pairs):
     return pl.DataFrame(
         {"day": [p[0] for p in pairs], "factor": [float(p[1]) for p in pairs]},
         schema=FACTOR_SCHEMA,
+    )
+
+
+def minute_frame(day, points):
+    return pl.DataFrame(
+        {
+            "ts": [
+                datetime.combine(day, point[0], tzinfo=KST).astimezone(UTC) for point in points
+            ],
+            "open": [float(point[1]) for point in points],
+            "high": [float(point[2]) for point in points],
+            "low": [float(point[3]) for point in points],
+            "close": [float(point[4]) for point in points],
+            "volume": [float(point[5]) for point in points],
+        },
+        schema=CANDLE_SCHEMA,
     )
 
 
@@ -196,6 +220,85 @@ def test_panel_marks_symbols_absent_from_stock_info_as_untradable(snapshots, ser
     assert split_row["tradable_stock"] is False
     flat_row = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == D0)).row(0, named=True)
     assert flat_row["tradable_stock"] is True
+
+
+def test_panel_builds_1510_state_from_minutes(snapshots, series, split_data):
+    series.replace(
+        MINUTE_CANDLES,
+        "SPLIT",
+        minute_frame(
+            D0,
+            [
+                (time(9, 0), 2_700_000, 2_990_000, 2_700_000, 2_700_000, 999),
+                (time(9, 1), 2_600_000, 2_620_000, 2_600_000, 2_610_000, 100),
+                (time(12, 0), 2_610_000, 2_680_000, 2_580_000, 2_640_000, 200),
+                (time(13, 0), 2_640_000, 2_690_000, 2_500_000, 2_640_000, 0),
+                (time(15, 10), 2_630_000, 2_650_000, 2_620_000, 2_630_000, 50),
+                (time(15, 11), 2_900_000, 2_900_000, 2_450_000, 2_900_000, 400),
+            ],
+        ),
+    )
+
+    panel = load_panel(snapshots, series)
+
+    row = panel.filter((pl.col("symbol") == "SPLIT") & (pl.col("day") == D0)).row(0, named=True)
+    assert row["intraday_exact"] is True
+    assert row["close_1510"] == pytest.approx(2_630_000 * 0.02)
+    assert row["high_1510"] == pytest.approx(2_680_000 * 0.02)
+    assert row["low_1510"] == pytest.approx(2_580_000 * 0.02)
+    assert row["volume_1510"] == pytest.approx(350 / 0.02)
+
+    next_day = panel.filter((pl.col("symbol") == "SPLIT") & (pl.col("day") == D1)).row(
+        0, named=True
+    )
+    assert next_day["intraday_exact"] is False
+    assert next_day["close_1510"] == pytest.approx(next_day["close"])
+
+
+def test_panel_approximates_1510_state_without_minutes(snapshots, series, split_data):
+    panel = load_panel(snapshots, series)
+
+    row = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == D0)).row(0, named=True)
+    assert row["intraday_exact"] is False
+    assert row["close_1510"] == pytest.approx(row["close"])
+    assert row["high_1510"] == pytest.approx(row["high"])
+    assert row["low_1510"] == pytest.approx(row["low"])
+    assert row["volume_1510"] == pytest.approx(row["volume"])
+
+
+def test_panel_ignores_partially_covered_minute_days(snapshots, series, split_data):
+    series.replace(
+        MINUTE_CANDLES,
+        "FLAT",
+        minute_frame(
+            D0,
+            [
+                (time(11, 0), 990, 995, 985, 991, 10),
+                (time(15, 5), 991, 992, 990, 992, 5),
+            ],
+        ),
+    )
+
+    panel = load_panel(snapshots, series)
+
+    row = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == D0)).row(0, named=True)
+    assert row["intraday_exact"] is False
+    assert row["close_1510"] == pytest.approx(row["close"])
+
+
+def test_panel_flags_option_expiry_days(snapshots, series, split_data):
+    expiry = date(2018, 5, 10)
+    snapshots.write_date(
+        DAILY_CANDLES,
+        expiry,
+        snapshot_frame(expiry, [{"symbol": "FLAT", "open": 1000, "close": 1005}]),
+    )
+    series.replace(ADJUST_FACTORS, "FLAT", factor_frame([(D0, 1.0), (D1, 1.0), (expiry, 1.0)]))
+
+    panel = load_panel(snapshots, series)
+
+    flagged = panel.filter(pl.col("option_expiry")).get_column("day").unique().to_list()
+    assert flagged == [expiry]
 
 
 def test_market_view_respects_cutoff(snapshots, series, split_data):
