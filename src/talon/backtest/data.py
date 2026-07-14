@@ -1,5 +1,6 @@
 import logging
 from datetime import date, time
+from typing import cast
 
 import polars as pl
 
@@ -164,7 +165,9 @@ def _with_intraday_states(
         panel.join(states, on=["symbol", "day"], how="left")
         .with_columns(pl.col("close_1510").is_not_null().alias("intraday_exact"))
         .with_columns(
-            (pl.col("close_1510") * pl.col("factor")).fill_null(pl.col("close")).alias("close_1510"),
+            (pl.col("close_1510") * pl.col("factor"))
+            .fill_null(pl.col("close"))
+            .alias("close_1510"),
             (pl.col("high_1510") * pl.col("factor")).fill_null(pl.col("high")).alias("high_1510"),
             (pl.col("low_1510") * pl.col("factor")).fill_null(pl.col("low")).alias("low_1510"),
             (pl.col("volume_1510") / pl.col("factor"))
@@ -177,7 +180,9 @@ def _with_intraday_states(
 def _with_option_expiry(panel: pl.DataFrame) -> pl.DataFrame:
     if panel.is_empty():
         return panel.with_columns(pl.lit(False).alias("option_expiry"))
-    expiry = krx_calendar().option_expiry_days(panel["day"].min(), panel["day"].max())
+    first = cast(date, panel["day"].min())
+    last = cast(date, panel["day"].max())
+    expiry = krx_calendar().option_expiry_days(first, last)
     flag = pl.col("day").is_in(sorted(expiry)) if expiry else pl.lit(False)
     return panel.with_columns(flag.alias("option_expiry"))
 
