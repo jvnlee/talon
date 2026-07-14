@@ -9,3 +9,4 @@ build/
 .env
 /data/
 *.egg-info/
+.DS_Store
