@@ -111,6 +111,13 @@ class EodSummary(BaseModel):
     universe_size: int = 0
 
 
+class IntradaySummary(BaseModel):
+    status: str
+    day: date
+    slot: str
+    rows: int = 0
+
+
 class BackfillSummary(BaseModel):
     status: str
     sessions: int = 0

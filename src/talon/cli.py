@@ -46,6 +46,7 @@ from talon.factors.engine import warmup_periods
 from talon.ingest.collect import bootstrap_universe, run_collect
 from talon.ingest.eod import run_eod
 from talon.ingest.history import backfill_daily
+from talon.ingest.intraday import SLOTS, run_intraday
 from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
 from talon.markets.kr import krx_calendar
@@ -168,6 +169,33 @@ def eod(day_text: str | None, force: bool) -> None:
             )
     click.echo(summary.model_dump_json())
     if summary.status in {"error", "data-not-ready"}:
+        sys.exit(1)
+
+
+@main.command()
+@click.option("--slot", type=click.Choice(SLOTS), required=True)
+@click.option("--date", "day_text", default=None, help="YYYY-MM-DD")
+@click.option("--force", is_flag=True)
+def intraday(slot: str, day_text: str | None, force: bool) -> None:
+    cfg = load_settings()
+    day = date.fromisoformat(day_text) if day_text else None
+    with job_lock(cfg.locks_dir / "intraday.lock") as acquired:
+        if not acquired:
+            click.echo("intraday가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = run_intraday(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                alerter=rt.alerter,
+                slot=slot,
+                today=day,
+                force=force,
+            )
+    click.echo(summary.model_dump_json())
+    if summary.status in {"error", "data-not-ready", "no-credentials"}:
         sys.exit(1)
 
 

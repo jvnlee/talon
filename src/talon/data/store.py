@@ -8,6 +8,7 @@ from talon.models import Candle, InvestorFlowRecord
 
 MINUTE_CANDLES = "candles_1m"
 DAILY_CANDLES = "candles_1d"
+INTRADAY_SNAPSHOT = "intraday_snapshot"
 MARKET_CAP = "marketcap"
 INDICATOR_MINUTE = "indicators_1m"
 INDICATOR_DAILY = "indicators_1d"
@@ -32,6 +33,20 @@ CANDLE_SCHEMA: dict[str, pl.DataType] = {
 DAILY_SNAPSHOT_SCHEMA: dict[str, pl.DataType] = {
     "day": pl.Date(),
     "symbol": pl.Utf8(),
+    "open": pl.Float64(),
+    "high": pl.Float64(),
+    "low": pl.Float64(),
+    "close": pl.Float64(),
+    "volume": pl.Float64(),
+    "value": pl.Float64(),
+    "change_pct": pl.Float64(),
+}
+
+INTRADAY_SNAPSHOT_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
     "open": pl.Float64(),
     "high": pl.Float64(),
     "low": pl.Float64(),
@@ -148,6 +163,20 @@ class DatePartitionedStore:
 
     def write_date(self, dataset: str, day: date, frame: pl.DataFrame) -> None:
         _atomic_write(frame, self.path(dataset, day))
+
+    def upsert_date(
+        self, dataset: str, day: date, frame: pl.DataFrame, key: tuple[str, ...]
+    ) -> int:
+        if frame.is_empty():
+            return 0
+        path = self.path(dataset, day)
+        if path.exists():
+            merged = pl.concat([pl.read_parquet(path), frame], how="vertical_relaxed")
+        else:
+            merged = frame
+        merged = merged.unique(subset=list(key), keep="last").sort(list(key))
+        _atomic_write(merged, path)
+        return frame.height
 
     def has_date(self, dataset: str, day: date) -> bool:
         return self.path(dataset, day).exists()

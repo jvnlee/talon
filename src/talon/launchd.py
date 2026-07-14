@@ -7,10 +7,21 @@ from pathlib import Path
 from talon.errors import TalonError
 
 LABEL_PREFIX = "com.talon."
-JOBS = ("collect", "watchdog", "eod", "backfill", "reconcile", "adjust")
+JOBS = (
+    "collect",
+    "watchdog",
+    "eod",
+    "backfill",
+    "reconcile",
+    "adjust",
+    "intraday-decision",
+    "intraday-auction",
+)
 JOB_ARGS: dict[str, list[str]] = {
     "backfill": ["backfill-daily", "--years", "1"],
     "adjust": ["adjust", "build"],
+    "intraday-decision": ["intraday", "--slot", "15:10"],
+    "intraday-auction": ["intraday", "--slot", "15:35"],
 }
 CAFFEINATE = ("/usr/bin/caffeinate", "-s")
 
@@ -62,6 +73,14 @@ def render_plist(job: str, talon_bin: Path, data_dir: Path) -> bytes:
         spec["StartCalendarInterval"] = [
             {"Hour": 20, "Minute": 0},
             *({"Weekday": weekday, "Hour": 14, "Minute": 0} for weekday in range(1, 6)),
+        ]
+    elif job == "intraday-decision":
+        spec["StartCalendarInterval"] = [
+            {"Weekday": weekday, "Hour": 15, "Minute": 10} for weekday in range(1, 6)
+        ]
+    elif job == "intraday-auction":
+        spec["StartCalendarInterval"] = [
+            {"Weekday": weekday, "Hour": 15, "Minute": 35} for weekday in range(1, 6)
         ]
     else:
         raise TalonError(f"unknown launchd job: {job}")
