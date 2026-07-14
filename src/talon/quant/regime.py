@@ -38,6 +38,14 @@ class RegimeConfig:
     )
 
 
+class FullExposureRegime:
+    def columns(self) -> dict[str, str]:
+        return {}
+
+    def assess(self, day_frame: pl.DataFrame) -> Regime:
+        return Regime(label="full", exposure=1.0, breadth=None, weights={})
+
+
 class BreadthRegimeFilter:
     def __init__(self, config: RegimeConfig | None = None) -> None:
         self.config = config if config is not None else RegimeConfig()

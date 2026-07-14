@@ -95,6 +95,35 @@ def test_candidates_carry_min_open():
     assert candidate.min_open == 111.0
 
 
+def test_target_is_only_optional_for_close_overnight():
+    with pytest.raises(ValueError, match="목표가 없는 전략"):
+        spec(target=None)
+    overnight = spec(target=None, execution="close_overnight")
+    assert "s1__target" not in overnight.columns()
+    assert overnight.candidates(day_frame())[0].target is None
+
+
+def test_ref_price_defaults_to_close_without_extra_column():
+    default = spec()
+    assert "s1__ref" not in default.columns()
+    assert default.decision_columns()["ref_price"] == "close"
+
+
+def test_ref_price_override_feeds_candidates():
+    overridden = spec(ref_price="prev_close")
+    assert overridden.columns()["s1__ref"] == "prev_close"
+    frame = day_frame().with_columns(pl.Series("s1__ref", [105.0, None, None]))
+    assert overridden.candidates(frame)[0].ref_price == 105.0
+
+
+def test_decision_columns_cover_sizing_inputs():
+    parts = spec().decision_columns()
+    assert parts["ref_price"] == "close"
+    assert parts["stop"] == "close - 10"
+    assert parts["target"] == "close + 20"
+    assert "target" not in spec(target=None, execution="close_overnight").decision_columns()
+
+
 def test_wants_exit_true_only_on_true():
     strategy = spec()
     frame = day_frame()

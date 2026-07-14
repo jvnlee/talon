@@ -6,7 +6,7 @@ import polars as pl
 
 from talon.backtest.engine import ClosedTrade, Order, PortfolioView, PositionView
 from talon.quant.regime import Regime
-from talon.quant.signals import Signal
+from talon.quant.signals import INTRADAY_EXECUTIONS, Signal
 
 INTERVENTION_SCHEMA: dict[str, pl.DataType] = {
     "day": pl.Date(),
@@ -245,18 +245,22 @@ class RiskGate:
         return GateResult(orders=orders, approved=approved)
 
     def _invalid_levels(self, signal: Signal) -> str | None:
-        if signal.stop is None or signal.target is None:
+        if signal.stop is None:
             return "no-stop-target"
-        values = (signal.ref_price, signal.stop, signal.target)
+        if signal.target is None and signal.execution not in INTRADAY_EXECUTIONS:
+            return "no-stop-target"
+        values = [signal.ref_price, signal.stop]
+        if signal.target is not None:
+            values.append(signal.target)
+        if signal.min_open is not None:
+            values.append(signal.min_open)
         if not all(math.isfinite(value) for value in values):
-            return "non-finite-levels"
-        if signal.min_open is not None and not math.isfinite(signal.min_open):
             return "non-finite-levels"
         if signal.stop <= 0:
             return "stop-not-positive"
         if signal.stop >= signal.ref_price:
             return "stop-not-below-entry"
-        if signal.target <= signal.ref_price:
+        if signal.target is not None and signal.target <= signal.ref_price:
             return "target-not-above-entry"
         return None
 

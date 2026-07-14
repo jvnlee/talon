@@ -210,15 +210,18 @@ def test_replay_skips_symbols_without_bars_around_cut():
     assert violations == []
 
 
-def spec(entry, score="1", execution="close_overnight"):
-    return StrategySpec(
-        name="probe",
-        entry=entry,
-        score=score,
-        stop="close * 0.95",
-        target="close * 1.05",
-        execution=execution,
-    )
+def spec(entry, score="1", execution="close_overnight", **overrides):
+    base = {
+        "name": "probe",
+        "entry": entry,
+        "score": score,
+        "stop": "Ref(close, 1) * 0.95",
+        "target": "Ref(close, 1) * 1.05",
+        "ref_price": "prev_close",
+        "execution": execution,
+    }
+    base.update(overrides)
+    return StrategySpec(**base)
 
 
 def test_intraday_flags_same_day_close_and_volume_in_close_overnight():
@@ -271,8 +274,38 @@ def test_intraday_ignores_open_execution_strategies():
 def test_intraday_catches_the_strategy_that_motivated_it():
     violations = verify_intraday([close_strength()])
 
-    assert {v.column for v in violations} == {"close", "high", "volume", "value"}
+    assert {v.column for v in violations} >= {"close", "high", "volume", "value"}
     assert {v.part for v in violations} >= {"entry[1]", "entry[2]", "score"}
+
+
+def test_intraday_flags_forming_sizing_inputs():
+    violations = verify_intraday(
+        [spec(("Ref(close, 1) > 0",), ref_price="close", stop="close * 0.95")]
+    )
+
+    assert {(v.part, v.column) for v in violations} == {
+        ("ref_price", "close"),
+        ("stop", "close"),
+    }
+
+
+def test_intraday_allows_1510_state_columns():
+    violations = verify_intraday(
+        [
+            spec(
+                (
+                    "close_1510 / prev_close - 1 >= 0.03",
+                    "volume_1510 >= Ref(Mean(volume_1510, 20), 1) * 2.0",
+                ),
+                score="close_1510 / prev_close - 1",
+                ref_price="close_1510",
+                stop="close_1510 * 0.95",
+                target=None,
+            )
+        ]
+    )
+
+    assert violations == []
 
 
 def test_quant_core_refuses_a_close_bet_that_reads_today():

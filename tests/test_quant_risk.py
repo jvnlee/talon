@@ -25,6 +25,7 @@ def signal(
     stop=9_500.0,
     target=11_000.0,
     min_open=None,
+    execution="open",
 ):
     return Signal(
         strategy=strategy,
@@ -34,6 +35,7 @@ def signal(
         stop=stop,
         target=target,
         min_open=min_open,
+        execution=execution,
     )
 
 
@@ -96,6 +98,27 @@ def test_weight_cap_trims_budget():
     assert result.orders[0].budget == pytest.approx(2_000_000.0)
     trims = [i for i in gate.interventions if i.action == "trim"]
     assert [t.reason for t in trims] == ["weight-cap"]
+
+
+def test_overnight_signal_without_target_sizes_by_gap_anchor():
+    gate = RiskGate()
+    overnight = signal(target=None, execution="close_overnight")
+    result = gate.apply(D0, portfolio(), [overnight], BULL)
+
+    order = result.orders[0]
+    assert order.budget == pytest.approx(200 * 10_000.0)
+    assert order.target is None
+    assert order.fill_at == "close"
+    assert order.exit_next_open is True
+    assert gate.interventions == []
+
+
+def test_open_signal_without_target_is_still_rejected():
+    gate = RiskGate()
+    result = gate.apply(D0, portfolio(), [signal(target=None)], BULL)
+
+    assert result.orders == []
+    assert reasons(gate) == ["no-stop-target"]
 
 
 def test_rejects_invalid_levels():
