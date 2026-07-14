@@ -125,12 +125,15 @@ def close_strength(
     )
 
 
+CLOSE_BET_ASSUMED_GAP_PCT = 5.5
+
+
 def close_bet_v1(
     *,
     strength_pct: float = 3.0,
     volume_mult: float = 2.0,
     tail_max: float = 0.4,
-    assumed_gap_pct: float = 5.0,
+    assumed_gap_pct: float = CLOSE_BET_ASSUMED_GAP_PCT,
 ) -> StrategySpec:
     strength = "close_1510 / prev_close - 1"
     return StrategySpec(

@@ -284,7 +284,7 @@ def test_close_bet_buys_the_close_and_sells_the_next_open():
     assert trade["entry_price"] == pytest.approx(104.0)
     assert trade["exit_price"] == pytest.approx(106.0)
     assert trade["reason"] == "overnight"
-    assert trade["entry_notional"] == pytest.approx(19_230 * 104.0)
+    assert trade["entry_notional"] == pytest.approx(17_482 * 104.0)
     assert result.stats.open_positions == 0
     assert core.trades_by("close_bet_v1") == 1
 

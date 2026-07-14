@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from talon.factors.engine import compute_factors
 from talon.quant.signals import verify_intraday
@@ -185,7 +186,7 @@ def test_close_bet_fires_when_all_three_conditions_hold():
     candidate = fired[0]
     assert candidate.execution == "close_overnight"
     assert candidate.ref_price == 104.0
-    assert candidate.stop == 104.0 * 0.95
+    assert candidate.stop == pytest.approx(104.0 * (1 - 0.055))
     assert candidate.target is None
     assert candidate.score > 0
 
