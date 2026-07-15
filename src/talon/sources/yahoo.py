@@ -56,9 +56,19 @@ def fetch_quote(symbol: str, *, sleep: Callable[[float], None] = time.sleep) -> 
     yf = _load_yfinance()
 
     def pull() -> YahooQuote:
-        info = yf.Ticker(symbol).fast_info
-        price = _clean(getattr(info, "last_price", None))
-        prev_close = _clean(getattr(info, "previous_close", None))
+        ticker = yf.Ticker(symbol)
+        price = None
+        prev_close = None
+        try:
+            info = ticker.fast_info
+            price = _clean(getattr(info, "last_price", None))
+            prev_close = _clean(getattr(info, "previous_close", None))
+        except Exception:
+            log.debug("fast_info unavailable for %s", symbol)
+        if price is None:
+            bars = ticker.history(period="1d", interval="1m", prepost=True)
+            if bars is not None and len(bars) > 0:
+                price = _clean(bars["Close"].iloc[-1])
         if price is None:
             raise SourceError(f"{symbol} 시세가 비어 있습니다")
         return YahooQuote(price, prev_close)
