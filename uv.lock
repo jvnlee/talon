@@ -2114,6 +2114,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pykrx" },
     { name = "setuptools" },
+    { name = "yfinance" },
 ]
 
 [package.dev-dependencies]
@@ -2138,6 +2139,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.3" },
     { name = "pykrx", specifier = ">=1.2.8" },
     { name = "setuptools", specifier = ">=70,<81" },
+    { name = "yfinance", specifier = ">=0.2.40" },
 ]
 
 [package.metadata.requires-dev]

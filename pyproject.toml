@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "pykrx>=1.2.8",
     "setuptools>=70,<81",
+    "yfinance>=0.2.40",
 ]
 
 [project.scripts]
@@ -59,6 +60,7 @@ module = [
     "exchange_calendars.*",
     "pandas.*",
     "vectorbt.*",
+    "yfinance.*",
 ]
 ignore_missing_imports = true
 
