@@ -2,11 +2,15 @@ import os
 import plistlib
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from talon.errors import TalonError
 
 LABEL_PREFIX = "com.talon."
+BOOTSTRAP_ATTEMPTS = 5
+BOOTSTRAP_RETRY_WAIT = 2.0
 JOBS = (
     "collect",
     "watchdog",
@@ -98,10 +102,19 @@ def render_plist(job: str, talon_bin: Path, data_dir: Path) -> bytes:
     return plistlib.dumps(spec)
 
 
-def _launchctl(*args: str, check: bool) -> None:
-    result = subprocess.run(["launchctl", *args], capture_output=True, text=True)
-    if check and result.returncode != 0:
-        raise TalonError(f"launchctl {' '.join(args)} failed: {result.stderr.strip()}")
+def _launchctl(
+    *args: str,
+    check: bool,
+    attempts: int = 1,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    for attempt in range(attempts):
+        result = subprocess.run(["launchctl", *args], capture_output=True, text=True)
+        if result.returncode == 0 or not check:
+            return
+        if attempt < attempts - 1:
+            sleep(BOOTSTRAP_RETRY_WAIT)
+    raise TalonError(f"launchctl {' '.join(args)} failed: {result.stderr.strip()}")
 
 
 def install(
@@ -110,17 +123,31 @@ def install(
     *,
     directory: Path | None = None,
     run_launchctl: bool = True,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[Path]:
     directory = directory or agents_dir()
     directory.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
+    failures: list[str] = []
     for job in JOBS:
         path = plist_path(job, directory)
         path.write_bytes(render_plist(job, talon_bin, data_dir))
         written.append(path)
         if run_launchctl:
             _launchctl("bootout", f"gui/{os.getuid()}/{LABEL_PREFIX}{job}", check=False)
-            _launchctl("bootstrap", f"gui/{os.getuid()}", str(path), check=True)
+            try:
+                _launchctl(
+                    "bootstrap",
+                    f"gui/{os.getuid()}",
+                    str(path),
+                    check=True,
+                    attempts=BOOTSTRAP_ATTEMPTS,
+                    sleep=sleep,
+                )
+            except TalonError as exc:
+                failures.append(str(exc))
+    if failures:
+        raise TalonError("; ".join(failures))
     return written
 
 

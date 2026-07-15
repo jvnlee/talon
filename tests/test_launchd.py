@@ -1,6 +1,10 @@
 import plistlib
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from talon.errors import TalonError
 from talon.launchd import JOBS, install, plist_path, render_plist, uninstall
 
 TALON_BIN = Path("/opt/talon/.venv/bin/talon")
@@ -104,3 +108,48 @@ def test_install_and_uninstall_writes_plists(tmp_path):
     removed = uninstall(directory=tmp_path, run_launchctl=False)
     assert len(removed) == len(JOBS)
     assert not any(plist_path(job, tmp_path).exists() for job in JOBS)
+
+
+def test_bootstrap_retries_while_bootout_settles(tmp_path, monkeypatch):
+    attempts = {}
+
+    def fake_run(cmd, capture_output, text):
+        if cmd[1] == "bootstrap":
+            path = cmd[3]
+            attempts[path] = attempts.get(path, 0) + 1
+            if attempts[path] == 1:
+                return SimpleNamespace(
+                    returncode=5, stderr="Bootstrap failed: 5: Input/output error"
+                )
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("talon.launchd.subprocess.run", fake_run)
+    slept = []
+
+    written = install(TALON_BIN, DATA_DIR, directory=tmp_path, sleep=slept.append)
+
+    assert len(written) == len(JOBS)
+    assert all(count == 2 for count in attempts.values())
+    assert len(slept) == len(JOBS)
+
+
+def test_one_stuck_job_does_not_block_the_rest(tmp_path, monkeypatch):
+    bootstrapped = []
+
+    def fake_run(cmd, capture_output, text):
+        if cmd[1] == "bootstrap":
+            path = cmd[3]
+            if "reconcile" in path:
+                return SimpleNamespace(
+                    returncode=5, stderr="Bootstrap failed: 5: Input/output error"
+                )
+            bootstrapped.append(path)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("talon.launchd.subprocess.run", fake_run)
+
+    with pytest.raises(TalonError, match="reconcile"):
+        install(TALON_BIN, DATA_DIR, directory=tmp_path, sleep=lambda seconds: None)
+
+    assert len(bootstrapped) == len(JOBS) - 1
+    assert plist_path("close-auction", tmp_path).exists()
