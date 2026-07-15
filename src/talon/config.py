@@ -62,6 +62,12 @@ class TalonSettings(BaseSettings):
     dart_api_key: str = ""
     dart_throttle_seconds: float = 0.5
 
+    kis_app_key: str = ""
+    kis_app_secret: str = ""
+    kis_base_url: str = "https://openapi.koreainvestment.com:9443"
+    kis_rps: float = 8.0
+    kis_sweep_size: int = 300
+
     krx_id: str = ""
     krx_password: str = ""
     krx_api_key: str = ""
@@ -141,6 +147,14 @@ class TalonSettings(BaseSettings):
     @property
     def krx_login_configured(self) -> bool:
         return bool(self.krx_id and self.krx_password)
+
+    @property
+    def kis_configured(self) -> bool:
+        return bool(self.kis_app_key and self.kis_app_secret)
+
+    @property
+    def kis_token_path(self) -> Path:
+        return self.data_dir / "cache" / "kis_token.json"
 
     @property
     def krx_openapi_configured(self) -> bool:
