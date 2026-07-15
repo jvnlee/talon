@@ -132,6 +132,14 @@ class CloseAuctionSummary(BaseModel):
     rows: dict[str, int] = {}
 
 
+class OvertimeSummary(BaseModel):
+    status: str
+    day: date
+    symbols: int = 0
+    parts: dict[str, str] = {}
+    rows: dict[str, int] = {}
+
+
 class UsNightSummary(BaseModel):
     status: str
     symbols: int = 0

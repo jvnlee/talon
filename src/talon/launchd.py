@@ -22,6 +22,7 @@ JOBS = (
     "intraday-auction",
     "close-auction",
     "us-night",
+    "overtime",
 )
 JOB_ARGS: dict[str, list[str]] = {
     "backfill": ["backfill-daily", "--years", "1"],
@@ -96,6 +97,10 @@ def render_plist(job: str, talon_bin: Path, data_dir: Path) -> bytes:
     elif job == "us-night":
         spec["StartCalendarInterval"] = [
             {"Weekday": weekday, "Hour": 9, "Minute": 20} for weekday in range(2, 7)
+        ]
+    elif job == "overtime":
+        spec["StartCalendarInterval"] = [
+            {"Weekday": weekday, "Hour": 18, "Minute": 10} for weekday in range(1, 6)
         ]
     else:
         raise TalonError(f"unknown launchd job: {job}")

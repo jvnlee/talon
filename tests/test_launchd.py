@@ -93,6 +93,16 @@ def test_us_night_plist_runs_after_us_close():
     assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(9, 20)}
 
 
+def test_overtime_plist_runs_after_the_evening_session():
+    assert "overtime" in JOBS
+    spec = plistlib.loads(render_plist("overtime", TALON_BIN, DATA_DIR))
+    assert spec["Label"] == "com.talon.overtime"
+    assert spec["ProgramArguments"][-1] == "overtime"
+    entries = spec["StartCalendarInterval"]
+    assert {entry["Weekday"] for entry in entries} == {1, 2, 3, 4, 5}
+    assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(18, 10)}
+
+
 def test_every_job_holds_a_sleep_assertion_while_running():
     for job in JOBS:
         spec = plistlib.loads(render_plist(job, TALON_BIN, DATA_DIR))

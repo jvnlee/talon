@@ -38,6 +38,74 @@ def test_collect_requires_toss_credentials(tmp_path, monkeypatch):
     assert "TALON_TOSS_CLIENT_ID" in result.output
 
 
+def test_overtime_command_is_registered():
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "overtime" in result.output
+
+
+def test_overtime_exits_nonzero_when_not_ok(tmp_path, monkeypatch, cfg):
+    import json
+    from datetime import date
+
+    from talon.models import OvertimeSummary
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setattr(
+        "talon.cli.run_overtime",
+        lambda *args, **kwargs: OvertimeSummary(status="no-kis", day=date(2026, 7, 15)),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["overtime"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.output.splitlines()[0])["status"] == "no-kis"
+
+
+def test_overtime_ok_exits_zero(tmp_path, monkeypatch, cfg):
+    from datetime import date
+
+    from talon.models import OvertimeSummary
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setattr(
+        "talon.cli.run_overtime",
+        lambda *args, **kwargs: OvertimeSummary(
+            status="ok", day=date(2026, 7, 15), symbols=3
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["overtime"])
+
+    assert result.exit_code == 0
+
+
+def test_overtime_skips_when_lock_is_held(tmp_path, monkeypatch, cfg):
+    import fcntl
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("락이 잡혀 있으면 run_overtime을 부르면 안 됩니다")
+
+    monkeypatch.setattr("talon.cli.run_overtime", unexpected)
+    cfg.locks_dir.mkdir(parents=True, exist_ok=True)
+    with open(cfg.locks_dir / "overtime.lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        runner = CliRunner()
+        result = runner.invoke(main, ["overtime"])
+        fcntl.flock(held, fcntl.LOCK_UN)
+
+    assert result.exit_code == 0
+    assert "이미 실행 중" in result.output
+
+
 def test_launchd_install_print_only(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TALON_DATA_DIR", str(tmp_path / "data"))

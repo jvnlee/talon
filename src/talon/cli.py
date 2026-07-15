@@ -49,6 +49,7 @@ from talon.ingest.eod import run_eod
 from talon.ingest.history import backfill_daily
 from talon.ingest.intraday import SLOTS, run_intraday
 from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
+from talon.ingest.overtime import run_overtime
 from talon.ingest.usnight import run_us_night
 from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
@@ -212,6 +213,28 @@ def close_auction(force: bool) -> None:
             return
         with runtime(cfg, toss="skip") as rt:
             summary = run_close_auction(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                alerter=rt.alerter,
+                force=force,
+            )
+    click.echo(summary.model_dump_json())
+    if summary.status not in {"ok", "skipped-holiday"}:
+        sys.exit(1)
+
+
+@main.command("overtime")
+@click.option("--force", is_flag=True)
+def overtime(force: bool) -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "overtime.lock") as acquired:
+        if not acquired:
+            click.echo("overtime이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = run_overtime(
                 cfg,
                 cal=rt.cal,
                 state=rt.state,
