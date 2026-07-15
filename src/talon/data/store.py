@@ -13,6 +13,10 @@ INDEX_INTRADAY = "index_intraday"
 MACRO_INTRADAY = "macro_intraday"
 BREADTH_INTRADAY = "breadth_intraday"
 DART_POLL = "dart_poll"
+ORDERBOOK_INTRADAY = "orderbook_intraday"
+INVESTOR_ESTIMATE_INTRADAY = "investor_estimate_intraday"
+FLOW_RANKING_INTRADAY = "flow_ranking_intraday"
+FRGNMEM_RANKING_INTRADAY = "frgnmem_ranking_intraday"
 US_DAILY = "us_1d"
 US_MINUTE = "us_1m"
 MARKET_CAP = "marketcap"
@@ -109,6 +113,88 @@ DART_POLL_SCHEMA: dict[str, pl.DataType] = {
     "filing_type": pl.Utf8(),
     "report_nm": pl.Utf8(),
     "rcept_no": pl.Utf8(),
+}
+
+_ORDERBOOK_LEVEL_COLUMNS: dict[str, pl.DataType] = {
+    f"{side}_{kind}_{level}": pl.Float64()
+    for side in ("ask", "bid")
+    for kind in ("price", "qty")
+    for level in range(1, 11)
+}
+
+ORDERBOOK_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    **_ORDERBOOK_LEVEL_COLUMNS,
+    "total_ask_qty": pl.Float64(),
+    "total_bid_qty": pl.Float64(),
+    "net_bid_qty": pl.Float64(),
+    "accept_hour": pl.Utf8(),
+    "market_phase": pl.Utf8(),
+    "price": pl.Float64(),
+    "open": pl.Float64(),
+    "high": pl.Float64(),
+    "low": pl.Float64(),
+    "prev_close": pl.Float64(),
+    "antc_price": pl.Float64(),
+    "antc_qty": pl.Float64(),
+    "antc_phase": pl.Utf8(),
+    "vi_code": pl.Utf8(),
+}
+
+INVESTOR_ESTIMATE_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "bucket": pl.Int64(),
+    "frgn_qty": pl.Float64(),
+    "orgn_qty": pl.Float64(),
+    "sum_qty": pl.Float64(),
+}
+
+FLOW_RANKING_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "side": pl.Utf8(),
+    "rank": pl.Int64(),
+    "symbol": pl.Utf8(),
+    "name": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "total_qty": pl.Float64(),
+    "frgn_qty": pl.Float64(),
+    "orgn_qty": pl.Float64(),
+    "etc_corp_qty": pl.Float64(),
+    "ivtr_qty": pl.Float64(),
+    "bank_qty": pl.Float64(),
+    "insu_qty": pl.Float64(),
+    "mrbn_qty": pl.Float64(),
+    "fund_qty": pl.Float64(),
+    "etc_fin_qty": pl.Float64(),
+    "frgn_amount": pl.Float64(),
+    "orgn_amount": pl.Float64(),
+    "etc_corp_amount": pl.Float64(),
+    "price": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "volume": pl.Float64(),
+}
+
+FRGNMEM_RANKING_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "side": pl.Utf8(),
+    "rank": pl.Int64(),
+    "symbol": pl.Utf8(),
+    "name": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "net_qty": pl.Float64(),
+    "buy_qty": pl.Float64(),
+    "sell_qty": pl.Float64(),
+    "price": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "volume": pl.Float64(),
 }
 
 US_DAILY_SCHEMA: dict[str, pl.DataType] = {

@@ -163,8 +163,20 @@ def test_summary_carries_pulse_statuses(monkeypatch, krx_login, cal, state, snap
     assert summary.extras["vkospi"] == "ok"
     assert summary.extras["breadth"] == "ok"
     assert summary.extras["dart"] == "skipped-no-key"
+    assert summary.extras["kis_orderbook"] == "skipped-no-kis"
     stored = snapshots.read_date(MACRO_INTRADAY, DAY)
     assert stored.height == 4
+
+
+def test_auction_slot_skips_kis_sweep(monkeypatch, krx_login, cal, state, snapshots, alerter):
+    monkeypatch.setattr(
+        "talon.ingest.intraday.fetch_daily_ohlcv", lambda day, **kw: snapshot_frame(1000.0)
+    )
+
+    summary = run(krx_login, cal, state, snapshots, alerter, slot=AUCTION_SLOT)
+
+    assert "kis_orderbook" not in summary.extras
+    assert summary.extras["macro"] == "ok"
 
 
 def test_stock_failure_still_collects_macro(

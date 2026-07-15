@@ -6,6 +6,7 @@ import polars as pl
 from talon.config import TalonSettings
 from talon.data.state import StateDB
 from talon.data.store import INTRADAY_SNAPSHOT, DatePartitionedStore
+from talon.ingest.kis_sweep import collect_kis_sweep
 from talon.ingest.pulse import collect_pulse
 from talon.markets.kr import KrxCalendar
 from talon.models import IntradaySummary
@@ -74,6 +75,12 @@ def run_intraday(
             detail["rows"] = rows
 
     pulse = collect_pulse(cfg, snapshots=snapshots, slot=slot, day=day, stock_frame=stock_frame)
+    if slot == DECISION_SLOT:
+        kis = collect_kis_sweep(
+            cfg, snapshots=snapshots, slot=slot, day=day, stock_frame=stock_frame
+        )
+        pulse.parts.update(kis.parts)
+        pulse.rows.update(kis.rows)
     failed_parts = sorted(
         name for name, part_status in pulse.parts.items() if part_status.startswith("error")
     )
