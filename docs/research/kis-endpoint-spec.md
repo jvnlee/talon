@@ -136,6 +136,199 @@
 
 ---
 
+<!-- 부록 1.5~1.11: 2차 실측(2026-07-15 오후, 프로브 5+1 에이전트, 장중 실키 라이브 13:25~13:47 KST). 1차(1.1~1.4)와 동일 표기 규약·단위 표기 유지. A그룹 잔여 수집기(체결강도·거래원·프로그램·외국계 추이·시간외) 계약이다. -->
+
+### 1.5 체결강도 — `inquire-ccnl` (정본) + `volume-power` 랭킹 기각
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 경로 | `/uapi/domestic-stock/v1/quotations/inquire-ccnl` | 【실측】 |
+| TR / method | `FHKST01010300` / GET | 【실측】 |
+| 파라미터 | `FID_COND_MRKT_DIV_CODE`(J 고정) · `FID_INPUT_ISCD`(종목 6자리) | 【실측】 |
+| 응답 구조 | `output`=리스트 30행(최근 30체결, 시각 내림차순, row0=최신). output1/2 없음 | 【실측】 |
+| 갱신 주기 | 실시간. output=체결축(유동성 큰 종목은 30체결이 1초 미만) — 시간축 아님 | 【실측】 |
+| 페이지네이션 | 없음(tr_cont ''). 과거 특정 시각 틱 조회 별도 TR 필요 | 【실측】 |
+
+**핵심 응답 필드 / 단위**
+
+| 필드 | 의미 | 단위 | 근거 |
+|---|---|---|---|
+| `tday_rltv` → `strength` | 당일 누적 체결강도 = 매수누적/매도누적×100, 상한 999.99 | % | 【실측】 005930=104.53·247540=129.4 |
+| `stck_cntg_hour` → `tick_hour` | 체결 시각(row0=최신) | HHMMSS | 【실측】 |
+| `stck_prpr` → `price` / `prdy_ctrt` → `change_pct` | 체결가 / 전일대비율 | 원·% | 【실측】 |
+
+> **개별종목 체결강도 정본 = `output[0].tday_rltv`.** 배정 TR이던 체결강도 상위 랭킹 `volume-power`(`FHPST01680000`, `/uapi/domestic-stock/v1/ranking/volume-power`)는 **기각** — 개별종목 조회 불가(top-30 하드캡)이고, 상위권이 `seln=0` 초박형 전량매수(SPAC·채권ETN, 분모0 → `tday_rltv`=999.99 상한)로 채워져 종가베팅 신호로 저효용. 대형주(005930=104.53/247540=129.42)는 절대 top-30에 안 오름. 랭킹은 UN=`rt_cd`=2 거부, NX=별개 북. 시장코드 **J/UN/NX 세 값 상이** 실측(J=105.83 / UN=112.27 / NX=120.53 @13:47) → J=KRX북 체결강도, 반드시 J 하드코딩(§3.5).
+
+---
+
+### 1.6 거래원(회원사) 상위 5 + 외국계 창구 집계 — `inquire-member`
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 경로 | `/uapi/domestic-stock/v1/quotations/inquire-member` | 【실측】 |
+| TR / method | `FHKST01010600` / GET | 【실측】 |
+| 파라미터 | `FID_COND_MRKT_DIV_CODE`(J 고정) · `FID_INPUT_ISCD`(종목 6자리, KOSPI/KOSDAQ 자동판별 — 시장선택 코드 불요) | 【실측】 |
+| 응답 구조 | `output`=**원소 1개 리스트**(dict 아님) → `output[0]`, 71필드. output1/2 없음 | 【실측】 |
+| 갱신 주기 | 실시간 당일 누적 스냅샷(KRX 거래원 공시 기반, 잠정 추정치 아님). 행별 타임스탬프 없음 → 캡처 벽시계 필수 | 【실측】 |
+| 페이지네이션 | 없음(단일 종목 스냅샷) | 【실측】 |
+
+**핵심 응답 필드 / 단위** (rank n=1~5, side: `seln`→sell / `shnu`→buy)
+
+| 필드 | 의미 | 단위 | 근거 |
+|---|---|---|---|
+| `{prefix}_mbcr_no{n}` → `{side}_member_no_{n}` | 회원사 번호(안정 조인 키) | 코드 | 【실측】 |
+| `{prefix}_mbcr_name{n}` → `_name_{n}` | 회원사명(외국계도 한글) | — | 【실측】 |
+| `total_{prefix}_qty{n}` → `_qty_{n}` | 회원사 당일 누적 수량 | 주 | 【실측】 |
+| `{prefix}_mbcr_rlim{n}` → `_share_{n}` | 비중 = qty/`acml_vol`×100 | % | 【실측】 |
+| `{prefix}_qty_icdc{n}` → `_qty_change_{n}` | 직전 대비 증감 | 주 | 【실측】 |
+| **`{prefix}_mbcr_glob_yn_{n}`** → `_foreign_{n}` | 외국계 여부. **이 필드만 숫자 앞 언더스코어(`_1`)** | Y/N | 【실측】 |
+| `glob_total_shnu_qty`/`glob_total_seln_qty` → `foreign_buy_qty`/`foreign_sell_qty` | 외국계 창구 총매수/총매도(top5 밖 포함) | 주 | 【실측】 |
+| `glob_ntby_qty` → `foreign_net_qty` | 외국계 순매수 = 총매수−총매도. **양수=순매수(이름=부호 일치)** | 주 | 【실측】 J=+1,152,992 |
+| `glob_shnu_rlim`/`glob_seln_rlim` → `foreign_buy_share`/`foreign_sell_share` | 외국계 매수/매도 비중 | % | 【실측】 |
+| `glob_total_shnu_qty_icdc`/`glob_total_seln_qty_icdc` → `foreign_buy_qty_change`/`foreign_sell_qty_change` | 외국계 총매수/총매도 증감 | 주 | 【실측】 |
+| `acml_vol` → `volume` | 종목 당일 누적 거래량(모든 rlim의 분모) | 주 | 【실측】 |
+
+> **UN에서 외국계 순매수 부호 반전** 실측(005930 동시각 J `glob_ntby_qty`=+1,152,992 순매수 vs UN=−128,966 순매도, NX=0). 시장코드 미고정 시 신호가 뒤집힘 → **J 하드코딩 필수**. `glob_ntby_qty`(양수=순매수)는 1.4 `frgnmem-trade-estimate`의 `glob_ntsl_qty`(순'매도' 이름이나 양수=순매수) 부호함정과 **반대** — 두 엔드포인트 필드명 혼동 주의. `glob_total_*`는 top5 밖 외국계까지 합산이라 top5의 `glob_yn=Y`만 더해선 외국계 총량 재구성 불가.
+
+---
+
+### 1.7 프로그램매매 종목별 — `program-trade-by-stock`
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 경로 | `/uapi/domestic-stock/v1/quotations/program-trade-by-stock` | 【실측】 |
+| TR / method | `FHPPG04650101` / GET | 【실측】 |
+| 파라미터 | `FID_COND_MRKT_DIV_CODE`(J 고정) · `FID_INPUT_ISCD`(종목 6자리, KOSPI/KOSDAQ 동일) | 【실측】 |
+| 응답 구조 | `output`=리스트 30행(프로그램 체결틱, row0=최신 당일누적). **row0만 저장** | 【실측】 |
+| 갱신 주기 | 실시간 당일 누적. 30틱=최근 수 분치(이력 짧음) | 【실측】 |
+| 페이지네이션 | 없음(최근 30틱 고정창) | 【실측】 |
+
+**핵심 응답 필드 / 단위**
+
+| 필드 | 의미 | 단위 | 근거 |
+|---|---|---|---|
+| `bsop_hour` → `tick_hour` / `stck_prpr` → `price` / `prdy_ctrt` → `change_pct` | 틱 시각 / 현재가 / 전일대비율 | HHMMSS·원·% | 【실측】 |
+| `acml_vol` → `volume` | **종목 전체 누적거래량(프로그램 물량 아님)** | 주 | 【실측】 |
+| `whol_smtn_seln_vol`/`whol_smtn_shnu_vol`/`whol_smtn_ntby_qty` → `sell_qty`/`buy_qty`/`net_qty` | 프로그램 매도/매수/순매수 수량(당일 누적) | 주 | 【실측】 항등식 성립 |
+| `whol_smtn_seln_tr_pbmn`/`whol_smtn_shnu_tr_pbmn`/`whol_smtn_ntby_tr_pbmn` → `sell_amount`/`buy_amount`/`net_amount` | 프로그램 매도/매수/순매수 거래대금 | **원** | 【실측】 검산 1,647,528,253,000−1,366,372,537,500=281,155,715,500 |
+
+> **대금 단위 = 원**(1.8 시장종합의 백만원과 다름 — 컬럼명 동일계열이라 **혼용 절대 금지**, 코드에선 원자값 그대로 저장). UN은 KRX+NXT 합산으로 거래량 약 1.8배 부풀림(J `acml_vol`=16.66M vs UN=29.85M) → J 하드코딩. 차익/비차익 분해는 이 TR에 없음(1.8에서만).
+
+---
+
+### 1.8 프로그램매매 시장종합(시간) — `comp-program-trade-today`
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 경로 | `/uapi/domestic-stock/v1/quotations/comp-program-trade-today` | 【실측】 |
+| TR / method | `FHPPG04600101` / GET | 【실측】 |
+| 파라미터 | `FID_COND_MRKT_DIV_CODE`(J 고정) · **`FID_MRKT_CLS_CODE`(K=코스피/Q=코스닥, 시장선택은 이 파라미터)** · `FID_SCTN_CLS_CODE`("") · `FID_INPUT_ISCD`("") · `FID_COND_MRKT_DIV_CODE1`("") · `FID_INPUT_HOUR_1`("") | 【실측】 |
+| 응답 구조 | `output`=리스트 30행(최근 30분 1분봉, 각 행=그 분까지의 당일 누적). **전 행 저장** | 【실측】 |
+| 갱신 주기 | 당일 누적을 1분봉으로. 인접행 차분=분당 프로그램 순유입 | 【실측】 |
+| 페이지네이션 | 없음. 15:30 이후 시각행 전부 장마감 동일값(중복) | 【실측】 |
+
+**핵심 응답 필드 / 단위** (단위 **전부 백만원**)
+
+| 필드 | 의미 | 근거 |
+|---|---|---|
+| `bsop_hour` → `hour` | 1분 버킷 시각 | 【실측】 |
+| `arbt_smtn_seln_tr_pbmn`/`arbt_smtn_shnu_tr_pbmn`/`arbt_smtn_ntby_tr_pbmn` → `arb_sell_amount`/`arb_buy_amount`/`arb_net_amount` | 차익거래 매도/매수/순매수 대금 | 【실측】 항등식 성립 |
+| `nabt_smtn_seln_tr_pbmn`/`nabt_smtn_shnu_tr_pbmn`/`nabt_smtn_ntby_tr_pbmn` → `nonarb_sell_amount`/`nonarb_buy_amount`/`nonarb_net_amount` | 비차익거래 매도/매수/순매수 대금 | 【실측】 |
+| `whol_smtn_ntby_tr_pbmn` → `total_net_amount` | 전체 프로그램 순매수 대금(=차익+비차익) | 【실측】 |
+
+> **symbol 컬럼 없음**(시장종합, 키는 `(slot, market, hour)`). **`bstp_nmix_prpr`/`bstp_nmix_prdy_vrss`/`prdy_vrss_sign` 업종지수 3필드는 실측 전부 빈값 → 저장하지 않음**(업종지수는 별도 지수 API). 저장 목적: 30분 누적경로는 15:30 이후 장마감 동일값으로 덮여 소실되므로 14:40~15:10 프로그램 흐름 원천을 지금 적재해야 함. UN=NXT 오염 → J.
+
+---
+
+### 1.9 외국계 순매수추이(종목별) — `frgnmem-pchs-trend`
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 경로 | `/uapi/domestic-stock/v1/quotations/frgnmem-pchs-trend` | 【실측】 |
+| TR / method | `FHKST644400C0` / GET | 【실측】 |
+| 파라미터 | **정확히 3개**: `FID_COND_MRKT_DIV_CODE`(J 고정) · `FID_INPUT_ISCD`(종목) · `FID_INPUT_ISCD_2`("99999"=외국계 창구 전체). **`FID_COND_SCR_DIV_CODE` 없음**(미전송에도 `rt_cd` 0) | 【실측】 |
+| 응답 구조 | `output`=단일 리스트, 실측 100행 고정(최근 100틱 롤링, row0=최신). 행에 종목코드 없음 → 요청 symbol 부착 | 【실측】 |
+| 갱신 주기 | 실시간 러닝 누적. 틱 간격 중앙값 ~55초(동일초 중복행·간헐 갭 존재) | 【실측】 |
+| 페이지네이션 | 없음(tr_cont ''). 100틱 롤링이 상한, 소급 불가(forward-only) | 【실측】 |
+
+**핵심 응답 필드 / 단위** (**전 행 저장 + `seq`**=enumerate index, 0=최신)
+
+| 필드 | 의미 | 단위 | 근거 |
+|---|---|---|---|
+| `bsop_hour` → `tick_hour` | 틱 시각 | HHMMSS | 【실측】 초 해상도, 동일초 중복행 24% |
+| `stck_prpr` → `price` / `prdy_ctrt` → `change_pct` | 현재가 / 전일대비율 | 원·% | 【실측】 |
+| `acml_vol` → `volume` | 누적 거래량(**전체 시장, 외국계 아님**) | 주 | 【실측】 |
+| `frgn_seln_vol`/`frgn_shnu_vol` → `foreign_sell_qty`/`foreign_buy_qty` | 외국계 창구 누적 매도/매수 | 주 | 【실측】 |
+| `glob_ntby_qty` → `foreign_net_qty` | 외국계 순매수(누적=매수−매도). **양수=순매수** | 주 | 【실측】 buy−sell=net 100/100 성립 |
+| `frgn_ntby_qty_icdc` → `net_qty_change` | 순매수 증감(직전 틱 대비 증분, 음수 가능) | 주 | 【실측】 glob[i]−glob[i+1] 99/99 성립 |
+
+> **`(symbol, tick_hour)` 단독키 불가**(동일초 중복 24%) → `seq`가 키 구성원, 키 `(slot, symbol, seq)`. UN=값·부호 상이(J +1,158,487 vs UN −125,519), NX=0건 → J 하드코딩. estimate/랭킹(1.2~1.4)이 못 보는 14:30~15:10 외국계 흐름을 실틱으로 메우는 유일한 15:10-사용가능 외국계 수급 원천(15:10 호출 시 대략 13:55~15:10 커버).
+
+---
+
+### 1.10 시간외 현재가 — `inquire-overtime-price`
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 경로 | `/uapi/domestic-stock/v1/quotations/inquire-overtime-price` | 【실측】 |
+| TR / method | `FHPST02300000` / GET | 【실측】 |
+| 파라미터 | `FID_COND_MRKT_DIV_CODE`(J 고정) · `FID_INPUT_ISCD`(종목 6자리) | 【실측】 |
+| 응답 구조 | `output`=단일 dict(J=31필드). **UN이면 `ovtm_untp_*` 18필드 통째 소멸(31→13필드)** | 【실측】 |
+| 갱신 주기 | 시간외단일가 세션(16:00~18:00) 실시간 스냅샷. 세션 밖엔 0/기준가 잔상 | 【실측】 낮 검증, 저녁 실값은 18:10 첫 실행이 검증(§4) |
+| 페이지네이션 | 없음(단일 dict) | 【실측】 |
+
+**핵심 응답 필드 / 단위**
+
+| 필드 | 의미 | 단위 | 근거 |
+|---|---|---|---|
+| `ovtm_untp_sdpr` → `prev_close` | 시간외 기준가(=전일 정규종가) | 원 | 【실측】 |
+| `ovtm_untp_prpr` → `price` | 시간외단일가 현재가 | 원 | 【실측】 |
+| `ovtm_untp_prdy_vrss`/`_prdy_ctrt`/`_prdy_vrss_sign` → `change`/`change_pct`/`sign` | 전일대비/등락률/부호 | 원·%·코드 | 【실측】 |
+| `ovtm_untp_oprc`/`_hgpr`/`_lwpr` → `open`/`high`/`low` | 시간외 시/고/저 | 원 | 【실측】 |
+| `ovtm_untp_vol`/`_tr_pbmn` → `volume`/`amount` | 시간외 누적 거래량/대금 | 주·원 | 【실측】(대금 단위는 낮 0이라 미확정, §4) |
+| `ovtm_untp_mxpr`/`_llam` → `upper_limit`/`lower_limit` | 시간외 상한(기준가+10%)/하한(−10%) | 원 | 【실측】 검산 일치 |
+| `ovtm_vi_cls_code` → `vi_code` | 시간외 VI 발동구분(N=미발동) | 코드 | 【실측】 |
+
+> **UN/NX 시 `ovtm_untp_*` 필드 전부 소멸 → J 하드코딩 필수.** 세션 밖(낮)에는 `price`==`prev_close` && `volume`==0 무거래 잔상 → '오늘 시간외 종가'로 **오독 금지**, 18:00 세션 종료 후에만 실값(정상 데이터로 저장하되 해석 주의). 예상체결 수량 필드명은 이 TR에선 `ovtm_untp_antc_cnqn`(1.11류의 `ovtm_untp_antc_vol`과 반대) — 저장 안 함.
+
+---
+
+### 1.11 시간외단일가 등락률 랭킹 + 시장집계 — `overtime-fluctuation`
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 경로 | `/uapi/domestic-stock/v1/ranking/overtime-fluctuation` (**경로가 `ranking/`** — `quotations/` 아님) | 【실측】 |
+| TR / method | `FHPST02340000` / GET | 【실측】 |
+| 파라미터 | `FID_COND_MRKT_DIV_CODE`(J) · `FID_MRKT_CLS_CODE`("") · `FID_COND_SCR_DIV_CODE`("20234") · `FID_INPUT_ISCD`("0000"=전체) · **`FID_DIV_CLS_CODE`(2=상승률 → up / 5=하락률 → down, 필수)** · `FID_INPUT_PRICE_1`/`_2`("") · `FID_VOL_CNT`("") · `FID_TRGT_CLS_CODE`("") · `FID_TRGT_EXLS_CLS_CODE`("") | 【실측】 |
+| 응답 구조 | `output1`=시장집계(단일 dict, **iscd 무관 항상 전체시장**) + `output2`=랭킹 30행 | 【실측】 |
+| 갱신 주기 | 시간외단일가 세션(16:00~18:00) 랭킹. 낮엔 직전 세션 잔상 | 【실측】 |
+| 페이지네이션 | `output2` 30행 상한(연속조회 미노출) | 【실측】 |
+
+**output1(시장집계) → `overtime_market`(scope="all")**
+
+| 필드 | 의미 | 단위 | 근거 |
+|---|---|---|---|
+| `ovtm_untp_acml_vol`/`_acml_tr_pbmn` → `volume`/`amount` | 시간외 시장전체 누적 거래량/대금 | 주·**원** | 【실측】 크기·검산으로 원 확정 |
+| `ovtm_untp_exch_vol`/`_exch_tr_pbmn` → `kospi_volume`/`kospi_amount` | 코스피 시간외 거래량/대금 | 주·원 | 【실측】 |
+| `ovtm_untp_kosdaq_vol`/`_kosdaq_tr_pbmn` → `kosdaq_volume`/`kosdaq_amount` | 코스닥 시간외 거래량/대금 | 주·원 | 【실측】 exch+kosdaq=acml 검산 일치 |
+| `ovtm_untp_ascn_issu_cnt`/`_down_issu_cnt`/`_stnr_issu_cnt` → `up_count`/`down_count`/`flat_count` | 상승/하락/보합 종목수 | 종목 | 【실측】 |
+| `ovtm_untp_uplm_issu_cnt`/`_lslm_issu_cnt` → `upper_limit_count`/`lower_limit_count` | 상한/하한 종목수 | 종목 | 【실측】 |
+
+**output2(랭킹) → `overtime_ranking`** (rank=enumerate 1부터, side=up/down)
+
+| 필드 | 의미 | 단위 | 근거 |
+|---|---|---|---|
+| `mksc_shrn_iscd` → `symbol` / `hts_kor_isnm` → `name` | 단축코드 / 종목명 | — | 【실측】 |
+| `ovtm_untp_prpr` → `price` / `ovtm_untp_prdy_vrss` → `change` / `ovtm_untp_prdy_ctrt` → `change_pct` / `ovtm_untp_prdy_vrss_sign` → `sign` | 시간외 현재가/전일대비/등락률(랭킹키)/부호 | 원·원·%·코드 | 【실측】 |
+| `ovtm_untp_askp1`/`ovtm_untp_bidp1` → `ask`/`bid` | 시간외 최우선 매도/매수호가 | 원 | 【실측】 |
+| `ovtm_untp_vol` → `volume` / `ovtm_untp_seln_rsqn`/`ovtm_untp_shnu_rsqn` → `sell_rsqn`/`buy_rsqn` | 시간외 거래량 / 매도·매수 잔량 | 주 | 【실측】 |
+| `ovtm_vrss_acml_vol_rlim` → `vol_vs_day_pct` | 시간외거래량/정규누적거래량 비율 | % | 【실측】 |
+| `stck_prpr` → `day_price` / `acml_vol` → `day_volume` | **정규장 현재가/누적거래량(당일 실시간)** | 원·주 | 【실측】 낮엔 이종시각 혼재 |
+
+> 낮엔 시간외 값이 직전 세션 잔상인데 `stck_prpr`/`acml_vol`은 당일 정규 실시간 → **한 행에 이종시각 혼재, 캡처 벽시계 필수**(룩어헤드 방지). `FID_INPUT_ISCD`=1001은 여기선 **코스닥**(1.4 회원사의 1001=코스피와 충돌 — 엔드포인트별 코드표 분리, 우린 0000만 사용). ±10% 밴드 초과 등락률(−15.32%) 관측 → 밴드 가정 금지, 값 그대로 저장. **`inquire-daily-overtimeprice`(`FHPST02320000`)는 기각** — `output2` 시간외 컬럼(`ovtm_untp_vol`/`ovtm_untp_tr_pbmn`)이 완결일 포함 전 구간 0이고 `ovtm_untp_prpr`==`stck_clpr`(플레이스홀더 실측), 당일 행 생성 시점도 불명. 당일 확정 시간외는 1.10으로.
+
+---
+
 ## 2. 수집기 설계 지침
 
 ### 2.1 토큰 캐시 규칙
@@ -150,6 +343,8 @@
 - 슬라이딩윈도우 경계효과로 20/s 미만에서도 `EGW00201` 가능 → **실효 15/s 이하 권장**
 - **권장: 전역(프로세스 간) 스로틀 8 RPS 유지**(기존 config `kis_rps=8.0`은 이미 보수적이라 유지). 병렬 잡·형제 프로세스가 같은 계정을 공유하므로 프로세스 로컬이 아니라 전역 스로틀이어야 함
 - 콜 예산: **호가(1.1)·추정수급(1.2)는 종목당 1콜** → 유니버스 순회 시 콜 수 = 종목 수(스로틀 필수). **랭킹(1.3 top30 / 1.4 top100)은 시장당 1콜**로 콜 수 적음
+- **15:10 스윕 확장 콜 예산**(거래대금 상위 300 순회): 종목당 1콜 페처 5종 = 호가(1.1)·추정수급(1.2)·체결강도(1.5)·거래원(1.6)·프로그램 종목별(1.7) + **신규 체결강도/거래원/프로그램/외국계추이(1.5·1.6·1.7·1.9) 각 300콜** → 기존 604콜 + 300×4 + 시장종합(1.8) 2콜 ≈ **1,806콜 ≈ 3분46초 @8rps** → 15:14경 종료, 15:20 종가 동시호가 잡과 비충돌
+- **시간외 잡(18:10) 콜 예산**: 시간외 현재가(1.10) 종목당 1콜 ≈ 304콜(당일 15:10 유니버스 top300+pinned) + 등락률 랭킹(1.11) 상승·하락 2콜 ≈ **306콜**. 세션 종료(18:00) 후 실행이라 15:10 잡과 시간·유량 비충돌
 
 ### 2.3 재시도 vs 즉시 중단 에러
 | 상황 | 조치 | 근거 |
@@ -189,6 +384,11 @@
 - 1.2·1.3·1.4 잠정치는 **당일 저녁 확정치로 덮여 보존되지 않음** → 과거 재구성 불가. **지금부터 매일 15:10(및 15:20) 스냅샷 적재만이 백테스트 원천** 【문서】
 - **백테스트에는 절대 투입 금지** — 백테스트 수급은 KRX 확정치(pykrx EOD, T-1)만 사용. 잠정↔확정 혼용은 (1)룩어헤드 (2)추정-확정 괴리 이중 오염(메모리 방침·CLAUDE.md 룩어헤드 원칙과 정합)
 
+### 3.5 A그룹 잔여 수집기의 시장코드·시각 잔상 (1.5~1.11)
+- **체결강도(1.5)가 시장코드에 따라 값이 다름**: `inquire-ccnl` `tday_rltv` J=105.83 / UN=112.27 / NX=120.53 동시각 실측(@13:47) → J=KRX북 체결강도. 잔여 수집기 전부 §3.2 원칙대로 **J 하드코딩**(거래원 1.6은 UN에서 외국계 순매수 부호까지 반전, 시간외 1.10은 UN에서 시간외 필드 소멸, 프로그램 1.7·1.8은 UN이 NXT 합산으로 부풀림, 외국계추이 1.9는 UN 값·부호 상이+NX 0건)
+- **시간외(1.10·1.11)는 낮엔 전일/직전 세션 잔상**: `price`==`prev_close`·`volume`==0(1.10), 랭킹은 직전 세션 잔상인데 정규장 필드는 당일 실시간(1.11). 실값은 시간외단일가 세션 종료(18:00) 후에만 나옴 → **18:10 잡의 `SESSION_CLOSE`(KST 18:00) `too-early` 가드**가 방어(force 아니면 18:00 이전 수집 자체를 건너뜀). 캡처 벽시계 시각을 반드시 함께 저장(이종시각 혼재 룩어헤드 방지)
+- **프로그램 시장종합(1.8)은 15:30 이후 중복행**: 30분 1분봉이 장마감 후 전부 동일 누적값으로 덮여 `bsop_hour`가 153000~170000으로 나와도 값 동일. 저장 목적이 14:40~15:10 누적경로 보존이므로 15:10 잡에서 떠야 원천이 생김(15:30 이후엔 소실)
+
 ---
 
 ## 4. 실측·문서 불일치 및 미해결 항목
@@ -215,3 +415,15 @@
 9. **토큰 분당 1회 발급 제한** 【문서】: 만료 임박 재발급 실패 리스크 → 장전 선발급으로 회피(§2.1)
 
 10. **`rt_cd=0` + output 0건 케이스**(NX에서의 1.1 예상체결·1.4): 오류가 아니라 정상 응답이므로 에러 재시도 로직이 빈 응답을 유량 낭비 재시도로 처리하지 않도록 분기 필요 【실측】
+
+11. **종가 동시호가(15:20~15:30) 구간 갱신 거동 미검증** 【미검증】: 1.5 체결강도(`tday_rltv`)가 연속체결 멈춤에 마지막 연속장 값으로 고정되는지, 1.9 외국계추이(`bsop_hour` 틱)가 계속 생성되는지, 1.6 거래원 top5가 어떻게 마감·재정렬되는지 모두 13:25~13:47 연속장 관측만 있음. 15:20+ 재관측 필요
+
+12. **`*_qty_icdc` 증감의 기준 간격 미확정** 【미검증】: 1.6 거래원·1.7 프로그램·1.9 외국계추이의 `_icdc`(증감)가 직전 조회 대비인지 KRX 내부 갱신틱 대비인지 불명. 수집 간격 설계 시 재확인(현재는 원자값 그대로 저장)
+
+13. **시간외 저녁 실값·당일 행 생성 미검증** 【미검증】: 1.10·1.11의 시간외 필드(`ovtm_untp_prpr`/`_vol`/OHLC/`_tr_pbmn`)는 낮 관측이 전부 0/기준가 잔상. **오늘 18:10 첫 실행이 최초 검증**(세션 종료 후 실값이 채워지는지). 기각한 `inquire-daily-overtimeprice`의 당일(오늘) 행 생성 시점도 불명(13:25엔 최신행이 전일). 시간외 `_tr_pbmn` 단위(원/백만원)도 값이 0이라 미판별(1.11 시장집계 `acml_tr_pbmn`만 원 확정)
+
+14. **`FID_INPUT_ISCD_2` 다른 값 미검증** 【미검증】: 1.9 외국계추이의 `FID_INPUT_ISCD_2`=99999(외국계 창구 전체 집계)만 실측. 특정 외국계 회원사 코드로 필터되는지·다른 값 허용 여부 미확인
+
+15. **잠정→확정 부호 반전 여부(신규 수급)** 【미검증】: 1.6 거래원·1.7 프로그램·1.9 외국계추이의 장중 값이 장마감 확정치로 정정/부호반전되는지 미검증. 1.6은 KRX 거래원 공시 기반이라 정정 없어 보이나 확인 전까지 forward-only·백테스트 투입 금지 유지
+
+16. **저유동 종목 거래원 빈 슬롯 표현 미관측** 【미검증】: 1.6 거래원 5개 미만 종목의 빈 슬롯(회원사명/번호/수량)이 `""`인지 공백인지 `"0"`인지 미확인(테스트 종목 005930·247540은 5슬롯 다 참). 파서는 `_text`/`_num`이 빈문자열→None 처리하므로 안전하나 실측 확인 필요
