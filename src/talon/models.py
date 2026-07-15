@@ -124,6 +124,14 @@ class PulseSummary(BaseModel):
     rows: dict[str, int] = {}
 
 
+class CloseAuctionSummary(BaseModel):
+    status: str
+    day: date
+    symbols: int = 0
+    passes: dict[str, str] = {}
+    rows: dict[str, int] = {}
+
+
 class UsNightSummary(BaseModel):
     status: str
     symbols: int = 0

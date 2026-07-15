@@ -71,6 +71,15 @@ def test_adjust_plist_runs_after_eod_and_after_reconcile():
     assert all(e["Hour"] < 15 for e in catchup)
 
 
+def test_close_auction_plist_covers_the_closing_auction():
+    spec = plistlib.loads(render_plist("close-auction", TALON_BIN, DATA_DIR))
+    assert spec["Label"] == "com.talon.close-auction"
+    assert spec["ProgramArguments"][-1] == "close-auction"
+    entries = spec["StartCalendarInterval"]
+    assert {entry["Weekday"] for entry in entries} == {1, 2, 3, 4, 5}
+    assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(15, 20)}
+
+
 def test_us_night_plist_runs_after_us_close():
     spec = plistlib.loads(render_plist("us-night", TALON_BIN, DATA_DIR))
     assert spec["Label"] == "com.talon.us-night"

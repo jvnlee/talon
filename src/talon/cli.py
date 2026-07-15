@@ -43,6 +43,7 @@ from talon.data.store import (
 )
 from talon.errors import TalonError
 from talon.factors.engine import warmup_periods
+from talon.ingest.close_auction import run_close_auction
 from talon.ingest.collect import bootstrap_universe, run_collect
 from talon.ingest.eod import run_eod
 from talon.ingest.history import backfill_daily
@@ -198,6 +199,28 @@ def intraday(slot: str, day_text: str | None, force: bool) -> None:
             )
     click.echo(summary.model_dump_json())
     if summary.status in {"error", "data-not-ready", "no-credentials"}:
+        sys.exit(1)
+
+
+@main.command("close-auction")
+@click.option("--force", is_flag=True)
+def close_auction(force: bool) -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "close-auction.lock") as acquired:
+        if not acquired:
+            click.echo("close-auction이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = run_close_auction(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                alerter=rt.alerter,
+                force=force,
+            )
+    click.echo(summary.model_dump_json())
+    if summary.status not in {"ok", "skipped-holiday"}:
         sys.exit(1)
 
 

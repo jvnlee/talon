@@ -16,6 +16,7 @@ JOBS = (
     "adjust",
     "intraday-decision",
     "intraday-auction",
+    "close-auction",
     "us-night",
 )
 JOB_ARGS: dict[str, list[str]] = {
@@ -83,6 +84,10 @@ def render_plist(job: str, talon_bin: Path, data_dir: Path) -> bytes:
     elif job == "intraday-auction":
         spec["StartCalendarInterval"] = [
             {"Weekday": weekday, "Hour": 15, "Minute": 35} for weekday in range(1, 6)
+        ]
+    elif job == "close-auction":
+        spec["StartCalendarInterval"] = [
+            {"Weekday": weekday, "Hour": 15, "Minute": 20} for weekday in range(1, 6)
         ]
     elif job == "us-night":
         spec["StartCalendarInterval"] = [
