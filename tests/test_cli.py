@@ -414,6 +414,95 @@ def test_gap_stats_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, ser
     assert "전체 (표본 5건)" in result.output
 
 
+def _write_marketcap(snapshots, count=6):
+    from datetime import date, timedelta
+
+    import polars as pl
+
+    from talon.data.store import MARKET_CAP, MARKET_CAP_SCHEMA
+
+    days = [date(2026, 1, 5) + timedelta(days=i) for i in range(count)]
+    for day in days:
+        snapshots.write_date(
+            MARKET_CAP,
+            day,
+            pl.DataFrame(
+                {
+                    "day": [day],
+                    "symbol": ["AAA"],
+                    "close": [100.0],
+                    "cap": [1_000_000.0],
+                    "volume": [1000.0],
+                    "value": [100_000.0],
+                    "shares": [10_000.0],
+                },
+                schema=MARKET_CAP_SCHEMA,
+            ),
+        )
+
+
+def test_cohort_command_is_registered():
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "cohort" in result.output
+
+
+def test_cohort_refuses_to_touch_the_oos_zone(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["cohort", "--end", "2026-03-01", "--oos-start", "2026-02-01"])
+
+    assert result.exit_code == 1
+    assert "IS 전용" in result.output
+
+
+def test_cohort_requires_marketcap(tmp_path, monkeypatch, cfg, snapshots, series):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_UNIVERSE_MIN_TRADING_VALUE", "0")
+    _write_flat_daily(snapshots, series)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["cohort", "--oos-start", "2026-02-01"])
+
+    assert result.exit_code == 1
+    assert "시가총액 스토어가 없습니다" in result.output
+
+
+def test_cohort_smoke_reports_and_records_eleven_trials(
+    tmp_path, monkeypatch, cfg, snapshots, series
+):
+    import json
+
+    from talon.data.state import StateDB
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_UNIVERSE_MIN_TRADING_VALUE", "0")
+    _write_flat_daily(snapshots, series)
+    _write_marketcap(snapshots)
+
+    runner = CliRunner()
+    out_path = tmp_path / "cohort.json"
+    result = runner.invoke(
+        main, ["cohort", "--oos-start", "2026-02-01", "--record", "--out", str(out_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    json_line = next(line for line in result.output.splitlines() if line.startswith('{"start"'))
+    report = json.loads(json_line)
+    assert len(report["rows"]) == 11
+    assert report["baseline"]["n"] == 5
+    assert out_path.exists()
+
+    with StateDB(cfg.state_path) as state:
+        assert state.trial_count() == 11
+        assert state.trial_sharpes() == []
+
+
 def test_fidelity_needs_exact_1510_days(tmp_path, monkeypatch, cfg, snapshots, series):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))

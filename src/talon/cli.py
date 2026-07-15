@@ -9,9 +9,13 @@ from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import click
 import polars as pl
+
+if TYPE_CHECKING:
+    from talon.backtest.cohort import CohortReport
 
 from talon import __version__
 from talon import launchd as launchd_mod
@@ -528,6 +532,28 @@ def _record_trial(
         )
 
 
+def _record_cohort_trials(cfg: TalonSettings, report: "CohortReport") -> list[int]:
+    ids: list[int] = []
+    with StateDB(cfg.state_path) as state:
+        for row in report.rows:
+            description = (
+                f"{row.label} n={row.stats.n} 평균={row.stats.mean_pct:+.3f}% "
+                f"Δ={row.delta_mean_pct:+.3f}% t={row.welch_t:.2f} {row.verdict}"
+            )
+            ids.append(
+                state.record_trial(
+                    start=report.start,
+                    end=report.end,
+                    symbols=[],
+                    strategies=[description],
+                    sharpe_daily=None,
+                    trades=row.stats.n,
+                    total_return_pct=row.stats.mean_pct,
+                )
+            )
+    return ids
+
+
 @main.command()
 @click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
 @click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
@@ -833,6 +859,80 @@ def gap_stats(start_text: str | None, end_text: str | None, oos_start_text: str)
         )
         click.echo(f"{label} (표본 {stats.count:,}건): 평균 {stats.mean_pct:+.2f}% {quantiles}")
     click.echo(json.dumps([stats.model_dump() for stats in results], ensure_ascii=False))
+
+
+@main.command()
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD (OOS 시작일 이전만 허용)")
+@click.option("--oos-start", "oos_start_text", default="2024-01-01", show_default=True)
+@click.option("--record", is_flag=True, help="집계 11건을 활성 사이클 trial로 기록")
+@click.option("--out", "out_path", type=click.Path(path_type=Path), default=None)
+def cohort(
+    start_text: str | None,
+    end_text: str | None,
+    oos_start_text: str,
+    record: bool,
+    out_path: Path | None,
+) -> None:
+    """H1·H2 코호트의 익일 갭 분포를 무신호 기준선과 비교한다 (블로그 0단계 진단)."""
+    from talon.backtest.cohort import diagnose_cohorts, signal_warmup
+    from talon.backtest.grid import clamp_is_end
+    from talon.data.store import MARKET_CAP
+
+    cfg = load_settings()
+    oos_start = date.fromisoformat(oos_start_text)
+    start = date.fromisoformat(start_text) if start_text else None
+    try:
+        end = clamp_is_end(date.fromisoformat(end_text) if end_text else None, oos_start)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    load_start = _warmup_start(start, signal_warmup())
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=load_start,
+            end=end,
+            symbols=None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
+        )
+        cap_scan = rt.snapshots.scan(MARKET_CAP)
+        if cap_scan is None:
+            raise click.ClickException(
+                "시가총액 스토어가 없습니다 (talon eod / backfill-daily 로 marketcap 적재 필요)"
+            )
+        caps = cap_scan.select("day", "symbol", "cap").collect()
+    panel = panel.filter(pl.col("day") < oos_start).join(caps, on=["day", "symbol"], how="left")
+    try:
+        report = diagnose_cohorts(
+            panel,
+            start=start,
+            end=end,
+            universe_size=cfg.universe_size,
+            min_value=cfg.universe_min_trading_value,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(report.model_dump_json())
+    click.echo(
+        f"유니버스 {report.universe_pairs:,}쌍 · 기준선 {report.baseline.n:,}건 "
+        f"(평균 {report.baseline.mean_pct:+.3f}%) · 정지 제외 {report.halt_excluded}건 · "
+        f"상한가 제외 H1 {report.limit_up_excluded['h1']}건 / H2 {report.limit_up_excluded['h2']}건"
+    )
+    for row in report.rows:
+        base = "" if row.baseline_label == "baseline" else f" vs {row.baseline_label}"
+        click.echo(
+            f"{row.label:14} n={row.stats.n:>6} 평균={row.stats.mean_pct:+.3f}% "
+            f"중앙값={row.stats.median_pct:+.3f}% 승률={row.stats.win_rate_pct:.1f}% "
+            f"Δ={row.delta_mean_pct:+.3f}% t={row.welch_t:+.2f}{base} → {row.verdict}"
+        )
+    if record:
+        trial_ids = _record_cohort_trials(cfg, report)
+        click.echo(json.dumps({"recorded_trials": trial_ids}, ensure_ascii=False))
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report.model_dump_json(indent=2))
+        click.echo(str(out_path))
 
 
 @main.command()
