@@ -19,6 +19,7 @@ from talon.data.store import (
 )
 from talon.models import PulseSummary
 from talon.sources.dart import fetch_filings
+from talon.sources.investing import fetch_vkospi
 from talon.sources.krx_daily import KrxCredentials
 from talon.sources.krx_index import fetch_index_snapshot
 from talon.sources.yahoo import fetch_quote
@@ -29,6 +30,8 @@ log = logging.getLogger(__name__)
 INDEX_MARKETS = ("KOSPI", "KOSDAQ")
 MACRO_SERIES = (("USDKRW", "KRW=X"), ("ES_F", "ES=F"), ("NQ_F", "NQ=F"))
 MACRO_SOURCE = "yahoo"
+VKOSPI_SERIES = "VKOSPI"
+VKOSPI_SOURCE = "investing"
 ALL_MARKETS = "ALL"
 INDEX_KEY = ("slot", "market", "name")
 MACRO_KEY = ("slot", "series")
@@ -48,6 +51,7 @@ def collect_pulse(
     captured_at = now_utc()
     _run_part(summary, "index", lambda: _collect_index(cfg, snapshots, slot, day, captured_at))
     _run_part(summary, "macro", lambda: _collect_macro(snapshots, slot, day, captured_at))
+    _run_part(summary, "vkospi", lambda: _collect_vkospi(snapshots, slot, day, captured_at))
     _run_part(
         summary,
         "breadth",
@@ -126,6 +130,31 @@ def _collect_macro(
     rows = snapshots.upsert_date(MACRO_INTRADAY, day, frame, MACRO_KEY)
     if failed:
         return f"partial: {', '.join(failed)} 실패", rows
+    return "ok", rows
+
+
+def _collect_vkospi(
+    snapshots: DatePartitionedStore,
+    slot: str,
+    day: date,
+    captured_at: datetime,
+) -> tuple[str, int]:
+    quote = fetch_vkospi()
+    frame = pl.DataFrame(
+        [
+            {
+                "day": day,
+                "slot": slot,
+                "series": VKOSPI_SERIES,
+                "captured_at": captured_at,
+                "price": quote.price,
+                "prev_close": quote.prev_close,
+                "source": VKOSPI_SOURCE,
+            }
+        ],
+        schema=MACRO_INTRADAY_SCHEMA,
+    )
+    rows = snapshots.upsert_date(MACRO_INTRADAY, day, frame, MACRO_KEY)
     return "ok", rows
 
 

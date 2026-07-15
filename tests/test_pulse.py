@@ -2,8 +2,8 @@ from datetime import date
 
 import polars as pl
 import pytest
-from conftest import write_stock_info
 
+from conftest import write_stock_info
 from talon.data.store import (
     BREADTH_INTRADAY,
     DART_POLL,
@@ -13,6 +13,7 @@ from talon.data.store import (
 from talon.errors import SourceError
 from talon.ingest.pulse import collect_pulse
 from talon.sources.dart import DART_FILINGS_SCHEMA
+from talon.sources.investing import VkospiQuote
 from talon.sources.krx_index import INDEX_SNAPSHOT_SCHEMA
 from talon.sources.yahoo import YahooQuote
 
@@ -90,6 +91,7 @@ def fake_sources(monkeypatch):
         "talon.ingest.pulse.fetch_quote", lambda symbol, **kw: YahooQuote(100.0, 99.0)
     )
     monkeypatch.setattr("talon.ingest.pulse.fetch_filings", lambda key, day, **kw: dart_frame())
+    monkeypatch.setattr("talon.ingest.pulse.fetch_vkospi", lambda **kw: VkospiQuote(32.15, 30.9))
 
 
 def run(cfg, snapshots, frame=None):
@@ -99,7 +101,13 @@ def run(cfg, snapshots, frame=None):
 def test_collects_every_part(pulse_cfg, snapshots):
     summary = run(pulse_cfg, snapshots, stock_frame())
 
-    assert summary.parts == {"index": "ok", "macro": "ok", "breadth": "ok", "dart": "ok"}
+    assert summary.parts == {
+        "index": "ok",
+        "macro": "ok",
+        "vkospi": "ok",
+        "breadth": "ok",
+        "dart": "ok",
+    }
     stored = snapshots.read_date(INDEX_INTRADAY, DAY)
     assert stored.height == 4
     assert set(stored["market"].unique().to_list()) == {"KOSPI", "KOSDAQ"}
@@ -107,12 +115,15 @@ def test_collects_every_part(pulse_cfg, snapshots):
     assert stored["captured_at"].null_count() == 0
 
 
-def test_macro_records_all_three_series(pulse_cfg, snapshots):
+def test_macro_records_all_series(pulse_cfg, snapshots):
     run(pulse_cfg, snapshots, stock_frame())
 
     stored = snapshots.read_date(MACRO_INTRADAY, DAY)
-    assert sorted(stored["series"].to_list()) == ["ES_F", "NQ_F", "USDKRW"]
-    assert stored["price"].to_list() == [100.0] * 3
+    assert sorted(stored["series"].to_list()) == ["ES_F", "NQ_F", "USDKRW", "VKOSPI"]
+    by_series = {row["series"]: row for row in stored.to_dicts()}
+    assert by_series["VKOSPI"]["source"] == "investing"
+    assert by_series["VKOSPI"]["price"] == 32.15
+    assert by_series["USDKRW"]["source"] == "yahoo"
 
 
 def test_macro_partial_failure_keeps_the_rest(monkeypatch, pulse_cfg, snapshots):
@@ -127,7 +138,21 @@ def test_macro_partial_failure_keeps_the_rest(monkeypatch, pulse_cfg, snapshots)
 
     assert summary.parts["macro"].startswith("partial")
     stored = snapshots.read_date(MACRO_INTRADAY, DAY)
-    assert sorted(stored["series"].to_list()) == ["NQ_F", "USDKRW"]
+    assert sorted(stored["series"].to_list()) == ["NQ_F", "USDKRW", "VKOSPI"]
+
+
+def test_vkospi_failure_leaves_yahoo_macro_intact(monkeypatch, pulse_cfg, snapshots):
+    def boom(**kw):
+        raise SourceError("cloudflare challenge")
+
+    monkeypatch.setattr("talon.ingest.pulse.fetch_vkospi", boom)
+
+    summary = run(pulse_cfg, snapshots, stock_frame())
+
+    assert summary.parts["vkospi"].startswith("error")
+    assert summary.parts["macro"] == "ok"
+    stored = snapshots.read_date(MACRO_INTRADAY, DAY)
+    assert sorted(stored["series"].to_list()) == ["ES_F", "NQ_F", "USDKRW"]
 
 
 def test_breadth_counts_and_market_split(pulse_cfg, snapshots):
@@ -200,4 +225,4 @@ def test_reruns_overwrite_the_same_slot(pulse_cfg, snapshots):
     stored = snapshots.read_date(INDEX_INTRADAY, DAY)
     assert stored.height == 4
     macro = snapshots.read_date(MACRO_INTRADAY, DAY)
-    assert macro.height == 3
+    assert macro.height == 4

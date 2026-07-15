@@ -6,6 +6,7 @@ import pytest
 from talon.data.store import DAILY_SNAPSHOT_SCHEMA, INTRADAY_SNAPSHOT, MACRO_INTRADAY
 from talon.errors import SourceError
 from talon.ingest.intraday import AUCTION_SLOT, DECISION_SLOT, run_intraday
+from talon.sources.investing import VkospiQuote
 from talon.sources.krx_index import INDEX_SNAPSHOT_SCHEMA
 from talon.sources.yahoo import YahooQuote
 
@@ -22,6 +23,7 @@ def offline_pulse(monkeypatch):
     monkeypatch.setattr(
         "talon.ingest.pulse.fetch_quote", lambda symbol, **kw: YahooQuote(100.0, 99.0)
     )
+    monkeypatch.setattr("talon.ingest.pulse.fetch_vkospi", lambda **kw: VkospiQuote(32.0, 31.0))
 
 
 def snapshot_frame(volume: float, symbols: int = 1_200):
@@ -158,10 +160,11 @@ def test_summary_carries_pulse_statuses(monkeypatch, krx_login, cal, state, snap
 
     assert summary.extras["index"] == "empty"
     assert summary.extras["macro"] == "ok"
+    assert summary.extras["vkospi"] == "ok"
     assert summary.extras["breadth"] == "ok"
     assert summary.extras["dart"] == "skipped-no-key"
     stored = snapshots.read_date(MACRO_INTRADAY, DAY)
-    assert stored.height == 3
+    assert stored.height == 4
 
 
 def test_stock_failure_still_collects_macro(
