@@ -18,6 +18,14 @@ CLOSE_AUCTION_INTRADAY = "close_auction_intraday"
 INVESTOR_ESTIMATE_INTRADAY = "investor_estimate_intraday"
 FLOW_RANKING_INTRADAY = "flow_ranking_intraday"
 FRGNMEM_RANKING_INTRADAY = "frgnmem_ranking_intraday"
+VOLUME_POWER_INTRADAY = "volume_power_intraday"
+MEMBER_INTRADAY = "member_intraday"
+PROGRAM_TRADE_INTRADAY = "program_trade_intraday"
+PROGRAM_MARKET_INTRADAY = "program_market_intraday"
+FRGNMEM_TREND_INTRADAY = "frgnmem_trend_intraday"
+OVERTIME_PRICE = "overtime_price"
+OVERTIME_RANKING = "overtime_ranking"
+OVERTIME_MARKET = "overtime_market"
 US_DAILY = "us_1d"
 US_MINUTE = "us_1m"
 MARKET_CAP = "marketcap"
@@ -196,6 +204,152 @@ FRGNMEM_RANKING_SCHEMA: dict[str, pl.DataType] = {
     "price": pl.Float64(),
     "change_pct": pl.Float64(),
     "volume": pl.Float64(),
+}
+
+VOLUME_POWER_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "strength": pl.Float64(),
+    "tick_hour": pl.Utf8(),
+    "price": pl.Float64(),
+    "change_pct": pl.Float64(),
+}
+
+_MEMBER_LEVEL_COLUMNS: dict[str, pl.DataType] = {
+    f"{side}_member_{field}_{level}": dtype
+    for side in ("sell", "buy")
+    for field, dtype in (
+        ("no", pl.Utf8()),
+        ("name", pl.Utf8()),
+        ("qty", pl.Float64()),
+        ("share", pl.Float64()),
+        ("qty_change", pl.Float64()),
+        ("foreign", pl.Utf8()),
+    )
+    for level in range(1, 6)
+}
+
+MEMBER_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    **_MEMBER_LEVEL_COLUMNS,
+    "foreign_buy_qty": pl.Float64(),
+    "foreign_sell_qty": pl.Float64(),
+    "foreign_net_qty": pl.Float64(),
+    "foreign_buy_share": pl.Float64(),
+    "foreign_sell_share": pl.Float64(),
+    "foreign_buy_qty_change": pl.Float64(),
+    "foreign_sell_qty_change": pl.Float64(),
+    "volume": pl.Float64(),
+}
+
+PROGRAM_TRADE_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "tick_hour": pl.Utf8(),
+    "price": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "volume": pl.Float64(),
+    "sell_qty": pl.Float64(),
+    "buy_qty": pl.Float64(),
+    "net_qty": pl.Float64(),
+    "sell_amount": pl.Float64(),
+    "buy_amount": pl.Float64(),
+    "net_amount": pl.Float64(),
+}
+
+PROGRAM_MARKET_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "market": pl.Utf8(),
+    "hour": pl.Utf8(),
+    "arb_sell_amount": pl.Float64(),
+    "arb_buy_amount": pl.Float64(),
+    "arb_net_amount": pl.Float64(),
+    "nonarb_sell_amount": pl.Float64(),
+    "nonarb_buy_amount": pl.Float64(),
+    "nonarb_net_amount": pl.Float64(),
+    "total_net_amount": pl.Float64(),
+}
+
+FRGNMEM_TREND_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "seq": pl.Int64(),
+    "tick_hour": pl.Utf8(),
+    "price": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "volume": pl.Float64(),
+    "foreign_sell_qty": pl.Float64(),
+    "foreign_buy_qty": pl.Float64(),
+    "foreign_net_qty": pl.Float64(),
+    "net_qty_change": pl.Float64(),
+}
+
+OVERTIME_PRICE_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "prev_close": pl.Float64(),
+    "price": pl.Float64(),
+    "change": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "sign": pl.Utf8(),
+    "open": pl.Float64(),
+    "high": pl.Float64(),
+    "low": pl.Float64(),
+    "volume": pl.Float64(),
+    "amount": pl.Float64(),
+    "upper_limit": pl.Float64(),
+    "lower_limit": pl.Float64(),
+    "vi_code": pl.Utf8(),
+}
+
+OVERTIME_RANKING_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "side": pl.Utf8(),
+    "rank": pl.Int64(),
+    "symbol": pl.Utf8(),
+    "name": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "price": pl.Float64(),
+    "change": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "sign": pl.Utf8(),
+    "ask": pl.Float64(),
+    "bid": pl.Float64(),
+    "volume": pl.Float64(),
+    "sell_rsqn": pl.Float64(),
+    "buy_rsqn": pl.Float64(),
+    "vol_vs_day_pct": pl.Float64(),
+    "day_price": pl.Float64(),
+    "day_volume": pl.Float64(),
+}
+
+OVERTIME_MARKET_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "scope": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "volume": pl.Float64(),
+    "amount": pl.Float64(),
+    "kospi_volume": pl.Float64(),
+    "kospi_amount": pl.Float64(),
+    "kosdaq_volume": pl.Float64(),
+    "kosdaq_amount": pl.Float64(),
+    "up_count": pl.Int64(),
+    "down_count": pl.Int64(),
+    "flat_count": pl.Int64(),
+    "upper_limit_count": pl.Int64(),
+    "lower_limit_count": pl.Int64(),
 }
 
 US_DAILY_SCHEMA: dict[str, pl.DataType] = {
