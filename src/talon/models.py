@@ -116,6 +116,20 @@ class IntradaySummary(BaseModel):
     day: date
     slot: str
     rows: int = 0
+    extras: dict[str, str] = {}
+
+
+class PulseSummary(BaseModel):
+    parts: dict[str, str] = {}
+    rows: dict[str, int] = {}
+
+
+class UsNightSummary(BaseModel):
+    status: str
+    symbols: int = 0
+    daily_rows: int = 0
+    minute_rows: int = 0
+    failed: list[str] = []
 
 
 class MinuteBackfillSummary(BaseModel):

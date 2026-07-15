@@ -6,6 +6,7 @@ import polars as pl
 from talon.config import TalonSettings
 from talon.data.state import StateDB
 from talon.data.store import INTRADAY_SNAPSHOT, DatePartitionedStore
+from talon.ingest.pulse import collect_pulse
 from talon.markets.kr import KrxCalendar
 from talon.models import IntradaySummary
 from talon.notify.telegram import Alerter
@@ -42,33 +43,49 @@ def run_intraday(
         return IntradaySummary(status="no-credentials", day=day, slot=slot)
 
     run_id = state.start_job("intraday")
+    status = "ok"
+    rows = 0
+    stock_frame: pl.DataFrame | None = None
+    detail: dict[str, object] = {"day": day.isoformat(), "slot": slot}
     try:
         frame = fetch_daily_ohlcv(day, credentials=KrxCredentials(cfg.krx_id, cfg.krx_password))
     except Exception as exc:
         log.exception("intraday snapshot failed")
-        detail: dict[str, object] = {"day": day.isoformat(), "slot": slot, "error": str(exc)}
-        state.heartbeat("intraday", False, detail)
-        state.finish_job(run_id, False, detail)
+        status = "error"
+        detail["error"] = str(exc)
         alerter.alert("intraday-error", f"{day} {slot} 장중 스냅샷 실패: {exc}")
-        return IntradaySummary(status="error", day=day, slot=slot)
+    else:
+        if frame.height < MIN_ROWS:
+            status = "data-not-ready"
+            rows = frame.height
+            detail["rows"] = frame.height
+            alerter.alert(
+                "intraday-empty",
+                f"{day} {slot} 장중 스냅샷이 {frame.height}종목뿐입니다 "
+                "(KRX가 아직 안 채웠거나 막혔습니다)",
+            )
+        else:
+            stock_frame = frame
+            prepared = frame.with_columns(
+                pl.lit(slot).alias("slot"),
+                pl.lit(now_utc()).alias("captured_at"),
+            )
+            rows = snapshots.upsert_date(INTRADAY_SNAPSHOT, day, prepared, SNAPSHOT_KEY)
+            detail["rows"] = rows
 
-    if frame.height < MIN_ROWS:
-        thin: dict[str, object] = {"day": day.isoformat(), "slot": slot, "rows": frame.height}
-        state.heartbeat("intraday", False, thin)
-        state.finish_job(run_id, False, thin)
-        alerter.alert(
-            "intraday-empty",
-            f"{day} {slot} 장중 스냅샷이 {frame.height}종목뿐입니다 "
-            "(KRX가 아직 안 채웠거나 막혔습니다)",
-        )
-        return IntradaySummary(status="data-not-ready", day=day, slot=slot, rows=frame.height)
-
-    prepared = frame.with_columns(
-        pl.lit(slot).alias("slot"),
-        pl.lit(now_utc()).alias("captured_at"),
+    pulse = collect_pulse(cfg, snapshots=snapshots, slot=slot, day=day, stock_frame=stock_frame)
+    failed_parts = sorted(
+        name for name, part_status in pulse.parts.items() if part_status.startswith("error")
     )
-    rows = snapshots.upsert_date(INTRADAY_SNAPSHOT, day, prepared, SNAPSHOT_KEY)
-    done: dict[str, object] = {"day": day.isoformat(), "slot": slot, "rows": rows}
-    state.heartbeat("intraday", True, done)
-    state.finish_job(run_id, True, done)
-    return IntradaySummary(status="ok", day=day, slot=slot, rows=rows)
+    if failed_parts:
+        alerter.alert(
+            "intraday-extras",
+            f"{day} {slot} 부가 수집 실패: {', '.join(failed_parts)}",
+        )
+    detail["extras"] = pulse.parts
+    detail["extra_rows"] = pulse.rows
+
+    ok = status == "ok"
+    state.heartbeat("intraday", ok, detail)
+    state.finish_job(run_id, ok, detail)
+    return IntradaySummary(status=status, day=day, slot=slot, rows=rows, extras=pulse.parts)

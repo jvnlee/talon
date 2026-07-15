@@ -71,6 +71,15 @@ def test_adjust_plist_runs_after_eod_and_after_reconcile():
     assert all(e["Hour"] < 15 for e in catchup)
 
 
+def test_us_night_plist_runs_after_us_close():
+    spec = plistlib.loads(render_plist("us-night", TALON_BIN, DATA_DIR))
+    assert spec["Label"] == "com.talon.us-night"
+    assert spec["ProgramArguments"][-1] == "us-night"
+    entries = spec["StartCalendarInterval"]
+    assert {entry["Weekday"] for entry in entries} == {2, 3, 4, 5, 6}
+    assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(9, 20)}
+
+
 def test_every_job_holds_a_sleep_assertion_while_running():
     for job in JOBS:
         spec = plistlib.loads(render_plist(job, TALON_BIN, DATA_DIR))

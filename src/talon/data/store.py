@@ -9,6 +9,12 @@ from talon.models import Candle, InvestorFlowRecord
 MINUTE_CANDLES = "candles_1m"
 DAILY_CANDLES = "candles_1d"
 INTRADAY_SNAPSHOT = "intraday_snapshot"
+INDEX_INTRADAY = "index_intraday"
+MACRO_INTRADAY = "macro_intraday"
+BREADTH_INTRADAY = "breadth_intraday"
+DART_POLL = "dart_poll"
+US_DAILY = "us_1d"
+US_MINUTE = "us_1m"
 MARKET_CAP = "marketcap"
 INDICATOR_MINUTE = "indicators_1m"
 INDICATOR_DAILY = "indicators_1d"
@@ -54,6 +60,64 @@ INTRADAY_SNAPSHOT_SCHEMA: dict[str, pl.DataType] = {
     "volume": pl.Float64(),
     "value": pl.Float64(),
     "change_pct": pl.Float64(),
+}
+
+INDEX_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "market": pl.Utf8(),
+    "name": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "open": pl.Float64(),
+    "high": pl.Float64(),
+    "low": pl.Float64(),
+    "close": pl.Float64(),
+    "volume": pl.Float64(),
+    "value": pl.Float64(),
+    "cap": pl.Float64(),
+}
+
+MACRO_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "series": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "price": pl.Float64(),
+    "prev_close": pl.Float64(),
+    "source": pl.Utf8(),
+}
+
+BREADTH_INTRADAY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "market": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+    "advancing": pl.Int64(),
+    "declining": pl.Int64(),
+    "unchanged": pl.Int64(),
+    "total": pl.Int64(),
+}
+
+DART_POLL_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "slot": pl.Utf8(),
+    "polled_at": pl.Datetime("us", "UTC"),
+    "symbol": pl.Utf8(),
+    "corp_code": pl.Utf8(),
+    "corp_name": pl.Utf8(),
+    "corp_cls": pl.Utf8(),
+    "filing_type": pl.Utf8(),
+    "report_nm": pl.Utf8(),
+    "rcept_no": pl.Utf8(),
+}
+
+US_DAILY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "open": pl.Float64(),
+    "high": pl.Float64(),
+    "low": pl.Float64(),
+    "close": pl.Float64(),
+    "volume": pl.Float64(),
 }
 
 MARKET_CAP_SCHEMA: dict[str, pl.DataType] = {

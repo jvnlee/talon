@@ -17,6 +17,26 @@ INDICATOR_SYMBOLS = (
     "KR_BOND_30Y",
 )
 
+US_NIGHT_SYMBOLS = (
+    "SKHY",
+    "EWY",
+    "SPY",
+    "QQQ",
+    "SOXX",
+    "MU",
+    "NVDA",
+    "PKX",
+    "KB",
+    "SHG",
+    "WF",
+    "SKM",
+    "KT",
+    "LPL",
+    "KEP",
+    "GRVY",
+    "WBTN",
+)
+
 CsvList = Annotated[list[str], NoDecode]
 
 
@@ -55,6 +75,7 @@ class TalonSettings(BaseSettings):
 
     indicator_minute_symbols: CsvList = ["KOSPI", "KOSDAQ"]
     indicator_daily_symbols: CsvList = list(INDICATOR_SYMBOLS)
+    us_night_symbols: CsvList = list(US_NIGHT_SYMBOLS)
 
     collect_max_pages: int = 30
     collect_pre_open_minutes: int = 5
@@ -75,6 +96,7 @@ class TalonSettings(BaseSettings):
         "pinned_symbols",
         "indicator_minute_symbols",
         "indicator_daily_symbols",
+        "us_night_symbols",
         mode="before",
     )
     @classmethod

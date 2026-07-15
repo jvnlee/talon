@@ -16,12 +16,14 @@ JOBS = (
     "adjust",
     "intraday-decision",
     "intraday-auction",
+    "us-night",
 )
 JOB_ARGS: dict[str, list[str]] = {
     "backfill": ["backfill-daily", "--years", "1"],
     "adjust": ["adjust", "build"],
     "intraday-decision": ["intraday", "--slot", "15:10"],
     "intraday-auction": ["intraday", "--slot", "15:35"],
+    "us-night": ["us-night"],
 }
 CAFFEINATE = ("/usr/bin/caffeinate", "-s")
 
@@ -81,6 +83,10 @@ def render_plist(job: str, talon_bin: Path, data_dir: Path) -> bytes:
     elif job == "intraday-auction":
         spec["StartCalendarInterval"] = [
             {"Weekday": weekday, "Hour": 15, "Minute": 35} for weekday in range(1, 6)
+        ]
+    elif job == "us-night":
+        spec["StartCalendarInterval"] = [
+            {"Weekday": weekday, "Hour": 9, "Minute": 20} for weekday in range(2, 7)
         ]
     else:
         raise TalonError(f"unknown launchd job: {job}")

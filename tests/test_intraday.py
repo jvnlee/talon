@@ -3,12 +3,25 @@ from datetime import date
 import polars as pl
 import pytest
 
-from talon.data.store import DAILY_SNAPSHOT_SCHEMA, INTRADAY_SNAPSHOT
+from talon.data.store import DAILY_SNAPSHOT_SCHEMA, INTRADAY_SNAPSHOT, MACRO_INTRADAY
 from talon.errors import SourceError
 from talon.ingest.intraday import AUCTION_SLOT, DECISION_SLOT, run_intraday
+from talon.sources.krx_index import INDEX_SNAPSHOT_SCHEMA
+from talon.sources.yahoo import YahooQuote
 
 DAY = date(2026, 7, 14)
 SATURDAY = date(2026, 7, 11)
+
+
+@pytest.fixture(autouse=True)
+def offline_pulse(monkeypatch):
+    monkeypatch.setattr(
+        "talon.ingest.pulse.fetch_index_snapshot",
+        lambda day, market, **kw: pl.DataFrame(schema=INDEX_SNAPSHOT_SCHEMA),
+    )
+    monkeypatch.setattr(
+        "talon.ingest.pulse.fetch_quote", lambda symbol, **kw: YahooQuote(100.0, 99.0)
+    )
 
 
 def snapshot_frame(volume: float, symbols: int = 1_200):
@@ -134,3 +147,53 @@ def test_holiday_is_skipped(monkeypatch, krx_login, cal, state, snapshots, alert
 def test_unknown_slot_is_rejected(krx_login, cal, state, snapshots, alerter):
     with pytest.raises(ValueError, match="슬롯"):
         run(krx_login, cal, state, snapshots, alerter, slot="12:00")
+
+
+def test_summary_carries_pulse_statuses(monkeypatch, krx_login, cal, state, snapshots, alerter):
+    monkeypatch.setattr(
+        "talon.ingest.intraday.fetch_daily_ohlcv", lambda day, **kw: snapshot_frame(1000.0)
+    )
+
+    summary = run(krx_login, cal, state, snapshots, alerter)
+
+    assert summary.extras["index"] == "empty"
+    assert summary.extras["macro"] == "ok"
+    assert summary.extras["breadth"] == "ok"
+    assert summary.extras["dart"] == "skipped-no-key"
+    stored = snapshots.read_date(MACRO_INTRADAY, DAY)
+    assert stored.height == 3
+
+
+def test_stock_failure_still_collects_macro(
+    monkeypatch, krx_login, cal, state, snapshots, alerter
+):
+    def boom(day, **kw):
+        raise SourceError("krx blocked")
+
+    monkeypatch.setattr("talon.ingest.intraday.fetch_daily_ohlcv", boom)
+
+    summary = run(krx_login, cal, state, snapshots, alerter)
+
+    assert summary.status == "error"
+    assert summary.extras["macro"] == "ok"
+    assert summary.extras["breadth"] == "skipped-no-snapshot"
+    assert snapshots.read_date(MACRO_INTRADAY, DAY) is not None
+
+
+def test_pulse_failure_alerts_but_keeps_snapshot_ok(
+    monkeypatch, krx_login, cal, state, snapshots, alerter, notifier
+):
+    monkeypatch.setattr(
+        "talon.ingest.intraday.fetch_daily_ohlcv", lambda day, **kw: snapshot_frame(1000.0)
+    )
+
+    def boom(symbol, **kw):
+        raise SourceError("yahoo down")
+
+    monkeypatch.setattr("talon.ingest.pulse.fetch_quote", boom)
+
+    summary = run(krx_login, cal, state, snapshots, alerter)
+
+    assert summary.status == "ok"
+    assert summary.extras["macro"].startswith("error")
+    assert any("부가 수집 실패" in sent for sent in notifier.sent)

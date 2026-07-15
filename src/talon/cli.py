@@ -48,6 +48,7 @@ from talon.ingest.eod import run_eod
 from talon.ingest.history import backfill_daily
 from talon.ingest.intraday import SLOTS, run_intraday
 from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
+from talon.ingest.usnight import run_us_night
 from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
 from talon.markets.kr import krx_calendar
@@ -197,6 +198,20 @@ def intraday(slot: str, day_text: str | None, force: bool) -> None:
             )
     click.echo(summary.model_dump_json())
     if summary.status in {"error", "data-not-ready", "no-credentials"}:
+        sys.exit(1)
+
+
+@main.command("us-night")
+def us_night() -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "us-night.lock") as acquired:
+        if not acquired:
+            click.echo("us-night가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = run_us_night(cfg, state=rt.state, series=rt.series, alerter=rt.alerter)
+    click.echo(summary.model_dump_json())
+    if summary.status == "error":
         sys.exit(1)
 
 
