@@ -28,6 +28,13 @@ OVERTIME_RANKING = "overtime_ranking"
 OVERTIME_MARKET = "overtime_market"
 US_DAILY = "us_1d"
 US_MINUTE = "us_1m"
+US_MACRO_DAILY = "us_macro_1d"
+US_EVENTS = "us_events"
+US_EVENTS_HISTORY = "us_events_history"
+US_EVENTS_HISTORY_NAME = "all"
+US_EARNINGS = "us_earnings"
+US_KR_MAP = "us_kr_map"
+US_KR_MAP_NAME = "map"
 MARKET_CAP = "marketcap"
 INDICATOR_MINUTE = "indicators_1m"
 INDICATOR_DAILY = "indicators_1d"
@@ -359,6 +366,56 @@ US_DAILY_SCHEMA: dict[str, pl.DataType] = {
     "low": pl.Float64(),
     "close": pl.Float64(),
     "volume": pl.Float64(),
+}
+
+US_MACRO_DAILY_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "value": pl.Float64(),
+    "source": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+}
+
+US_EVENTS_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "event_day": pl.Date(),
+    "kst_at": pl.Datetime("us", "UTC"),
+    "category": pl.Utf8(),
+    "tier": pl.Utf8(),
+    "source": pl.Utf8(),
+    "in_hold_window": pl.Boolean(),
+    "captured_at": pl.Datetime("us", "UTC"),
+}
+
+US_EVENTS_HISTORY_SCHEMA: dict[str, pl.DataType] = {
+    "event_key": pl.Utf8(),
+    "event_day": pl.Date(),
+    "kst_at": pl.Datetime("us", "UTC"),
+    "category": pl.Utf8(),
+    "tier": pl.Utf8(),
+    "source": pl.Utf8(),
+}
+
+US_EARNINGS_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "report_day": pl.Date(),
+    "when": pl.Utf8(),
+    "confirmed": pl.Boolean(),
+    "in_hold_window": pl.Boolean(),
+    "source": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+}
+
+US_KR_MAP_SCHEMA: dict[str, pl.DataType] = {
+    "us_symbol": pl.Utf8(),
+    "kr_theme": pl.Utf8(),
+    "kr_symbols": pl.List(pl.Utf8()),
+    "link_type": pl.Utf8(),
+    "lead_strength": pl.Utf8(),
+    "live_at_1510": pl.Boolean(),
+    "effective_from": pl.Date(),
+    "effective_to": pl.Date(),
+    "source_note": pl.Utf8(),
 }
 
 MARKET_CAP_SCHEMA: dict[str, pl.DataType] = {
