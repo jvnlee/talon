@@ -115,6 +115,7 @@ class TalonSettings(BaseSettings):
     us_source_throttle_seconds: float = 0.5
 
     fred_api_key: str = ""
+    ecos_api_key: str = ""
 
     collect_max_pages: int = 30
     collect_pre_open_minutes: int = 5

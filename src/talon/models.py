@@ -148,6 +148,7 @@ class UsEodSummary(BaseModel):
     reseeded: int = 0
     stale: list[str] = []
     failed: list[str] = []
+    fallback: list[str] = []
     macro: dict[str, str] = {}
 
 

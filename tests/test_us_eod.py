@@ -194,3 +194,119 @@ def test_stale_macro_series_marks_partial(cfg, uscal, state, series, alerter):
 
     assert summary.status == "partial"
     assert summary.macro["VIX"].startswith("stale")
+
+
+def test_yahoo_outage_uses_kis_fallback(cfg, uscal, state, series, alerter):
+    cfg.us_eod_symbols = ["AAA"]
+    series.replace(US_DAILY, "AAA", bars_frame([date(2026, 7, 15), date(2026, 7, 16)]))
+
+    def fetch(symbol, *, start, **kw):
+        raise SourceError("yahoo down")
+
+    def fallback(symbol):
+        return bars_frame([date(2026, 7, 15), date(2026, 7, 16), EXPECTED_SESSION])
+
+    summary = run_us_eod(
+        cfg,
+        uscal=uscal,
+        state=state,
+        series=series,
+        alerter=alerter,
+        now=lambda: NOW,
+        fetch_daily=fetch,
+        fetch_fallback=fallback,
+        fetch_macro_series=good_macro,
+        fetch_vix=good_vix,
+    )
+
+    assert summary.status == "ok"
+    assert summary.fallback == ["AAA"]
+    assert summary.failed == []
+    assert series.read(US_DAILY, "AAA").height == 3
+
+
+def test_fallback_never_overwrites_restated_history(cfg, uscal, state, series, alerter):
+    cfg.us_eod_symbols = ["AAA"]
+    series.replace(US_DAILY, "AAA", bars_frame([date(2026, 7, 15), date(2026, 7, 16)], close=100.0))
+
+    def fetch(symbol, *, start, **kw):
+        raise SourceError("yahoo down")
+
+    def fallback(symbol):
+        return bars_frame([date(2026, 7, 15), date(2026, 7, 16), EXPECTED_SESSION], close=50.0)
+
+    summary = run_us_eod(
+        cfg,
+        uscal=uscal,
+        state=state,
+        series=series,
+        alerter=alerter,
+        now=lambda: NOW,
+        fetch_daily=fetch,
+        fetch_fallback=fallback,
+        fetch_macro_series=good_macro,
+        fetch_vix=good_vix,
+    )
+
+    assert summary.failed == ["AAA"]
+    assert set(series.read(US_DAILY, "AAA")["close"].to_list()) == {100.0}
+
+
+def test_ecos_without_key_is_skipped_not_partial(cfg, uscal, state, series, alerter):
+    cfg.us_eod_symbols = []
+
+    summary = run(cfg, uscal, state, series, alerter, lambda *a, **k: bars_frame([]))
+
+    assert summary.macro["USDKRW_ECOS"] == "skipped-no-key"
+    assert summary.status == "ok"
+
+
+def test_ecos_with_key_is_collected(cfg, uscal, state, series, alerter):
+    cfg.us_eod_symbols = []
+    cfg.ecos_api_key = "test-key"
+    seen = {}
+
+    def fake_ecos(api_key, captured_at, *, start, end, **kw):
+        seen["key"] = api_key
+        seen["range"] = (start, end)
+        return macro_frame([date(2026, 7, 16), date(2026, 7, 17)], "ecos", captured_at)
+
+    summary = run_us_eod(
+        cfg,
+        uscal=uscal,
+        state=state,
+        series=series,
+        alerter=alerter,
+        now=lambda: NOW,
+        fetch_daily=lambda *a, **k: bars_frame([]),
+        fetch_fallback=None,
+        fetch_macro_series=good_macro,
+        fetch_vix=good_vix,
+        fetch_ecos=fake_ecos,
+    )
+
+    assert summary.macro["USDKRW_ECOS"] == "ok"
+    assert seen["key"] == "test-key"
+    assert seen["range"][0] == cfg.us_backfill_start
+    assert series.read(US_MACRO_DAILY, "USDKRW_ECOS")["source"].to_list()[0] == "ecos"
+
+
+def test_unsettled_latest_close_does_not_trigger_reseed(cfg, uscal, state, series, alerter):
+    cfg.us_eod_symbols = ["AAA"]
+    series.replace(US_DAILY, "AAA", bars_frame([date(2026, 7, 15), date(2026, 7, 16)], close=100.0))
+
+    def fetch(symbol, *, start, **kw):
+        frame = bars_frame([date(2026, 7, 15), date(2026, 7, 16), EXPECTED_SESSION], close=100.0)
+        return frame.with_columns(
+            pl.when(pl.col("day") == date(2026, 7, 16))
+            .then(100.4)
+            .otherwise(pl.col("close"))
+            .alias("close")
+        )
+
+    summary = run(cfg, uscal, state, series, alerter, fetch)
+
+    assert summary.reseeded == 0
+    assert summary.updated == 1
+    stored = series.read(US_DAILY, "AAA")
+    assert stored.filter(pl.col("day") == date(2026, 7, 16))["close"].to_list() == [100.4]
