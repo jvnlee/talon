@@ -50,7 +50,7 @@ def collect_pulse(
     summary = PulseSummary()
     captured_at = now_utc()
     _run_part(summary, "index", lambda: _collect_index(cfg, snapshots, slot, day, captured_at))
-    _run_part(summary, "macro", lambda: _collect_macro(snapshots, slot, day, captured_at))
+    _run_part(summary, "macro", lambda: collect_macro(snapshots, slot, day, captured_at))
     _run_part(summary, "vkospi", lambda: _collect_vkospi(snapshots, slot, day, captured_at))
     _run_part(
         summary,
@@ -98,7 +98,7 @@ def _collect_index(
     return "ok", rows
 
 
-def _collect_macro(
+def collect_macro(
     snapshots: DatePartitionedStore,
     slot: str,
     day: date,

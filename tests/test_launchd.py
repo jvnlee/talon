@@ -84,13 +84,37 @@ def test_close_auction_plist_covers_the_closing_auction():
     assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(15, 20)}
 
 
-def test_us_night_plist_runs_after_us_close():
-    spec = plistlib.loads(render_plist("us-night", TALON_BIN, DATA_DIR))
-    assert spec["Label"] == "com.talon.us-night"
-    assert spec["ProgramArguments"][-1] == "us-night"
+def test_us_eod_plist_runs_after_us_close_and_before_briefing():
+    spec = plistlib.loads(render_plist("us-eod", TALON_BIN, DATA_DIR))
+    assert spec["Label"] == "com.talon.us-eod"
+    assert spec["ProgramArguments"][-1] == "us-eod"
     entries = spec["StartCalendarInterval"]
     assert {entry["Weekday"] for entry in entries} == {2, 3, 4, 5, 6}
-    assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(9, 20)}
+    assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(6, 30)}
+
+
+def test_us_calendar_plist_runs_daily():
+    spec = plistlib.loads(render_plist("us-calendar", TALON_BIN, DATA_DIR))
+    assert spec["ProgramArguments"][-1] == "us-calendar"
+    assert spec["StartCalendarInterval"] == [{"Hour": 6, "Minute": 0}]
+
+
+def test_briefing_snapshot_plist_runs_on_kr_weekday_mornings():
+    spec = plistlib.loads(render_plist("briefing-snapshot", TALON_BIN, DATA_DIR))
+    assert spec["ProgramArguments"][-1] == "briefing-snapshot"
+    entries = spec["StartCalendarInterval"]
+    assert {entry["Weekday"] for entry in entries} == {1, 2, 3, 4, 5}
+    assert {(entry["Hour"], entry["Minute"]) for entry in entries} == {(7, 30)}
+
+
+def test_install_removes_retired_us_night_plist(tmp_path):
+    stale = plist_path("us-night", tmp_path)
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"stale")
+
+    install(TALON_BIN, DATA_DIR, directory=tmp_path, run_launchctl=False)
+
+    assert not stale.exists()
 
 
 def test_overtime_plist_runs_after_the_evening_session():

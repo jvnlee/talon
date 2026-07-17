@@ -140,12 +140,37 @@ class OvertimeSummary(BaseModel):
     rows: dict[str, int] = {}
 
 
-class UsNightSummary(BaseModel):
+class UsEodSummary(BaseModel):
     status: str
     symbols: int = 0
-    daily_rows: int = 0
-    minute_rows: int = 0
+    seeded: int = 0
+    updated: int = 0
+    reseeded: int = 0
+    stale: list[str] = []
     failed: list[str] = []
+    macro: dict[str, str] = {}
+
+
+class UsCalendarSummary(BaseModel):
+    status: str
+    day: date
+    parts: dict[str, str] = {}
+    events: int = 0
+    earnings: int = 0
+    history_rows: int = 0
+
+
+class BriefingSnapshotSummary(BaseModel):
+    status: str
+    day: date
+    parts: dict[str, str] = {}
+    rows: dict[str, int] = {}
+
+
+class UsMapSummary(BaseModel):
+    status: str
+    rows: int = 0
+    unknown: list[str] = []
 
 
 class MinuteBackfillSummary(BaseModel):

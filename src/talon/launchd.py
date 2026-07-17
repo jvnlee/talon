@@ -21,15 +21,17 @@ JOBS = (
     "intraday-decision",
     "intraday-auction",
     "close-auction",
-    "us-night",
+    "us-eod",
+    "us-calendar",
+    "briefing-snapshot",
     "overtime",
 )
+REMOVED_JOBS = ("us-night",)
 JOB_ARGS: dict[str, list[str]] = {
     "backfill": ["backfill-daily", "--years", "1"],
     "adjust": ["adjust", "build"],
     "intraday-decision": ["intraday", "--slot", "15:10"],
     "intraday-auction": ["intraday", "--slot", "15:35"],
-    "us-night": ["us-night"],
 }
 CAFFEINATE = ("/usr/bin/caffeinate", "-s")
 
@@ -94,9 +96,15 @@ def render_plist(job: str, talon_bin: Path, data_dir: Path) -> bytes:
         spec["StartCalendarInterval"] = [
             {"Weekday": weekday, "Hour": 15, "Minute": 20} for weekday in range(1, 6)
         ]
-    elif job == "us-night":
+    elif job == "us-eod":
         spec["StartCalendarInterval"] = [
-            {"Weekday": weekday, "Hour": 9, "Minute": 20} for weekday in range(2, 7)
+            {"Weekday": weekday, "Hour": 6, "Minute": 30} for weekday in range(2, 7)
+        ]
+    elif job == "us-calendar":
+        spec["StartCalendarInterval"] = [{"Hour": 6, "Minute": 0}]
+    elif job == "briefing-snapshot":
+        spec["StartCalendarInterval"] = [
+            {"Weekday": weekday, "Hour": 7, "Minute": 30} for weekday in range(1, 6)
         ]
     elif job == "overtime":
         spec["StartCalendarInterval"] = [
@@ -134,6 +142,12 @@ def install(
     directory.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     failures: list[str] = []
+    for job in REMOVED_JOBS:
+        stale = plist_path(job, directory)
+        if run_launchctl:
+            _launchctl("bootout", f"gui/{os.getuid()}/{LABEL_PREFIX}{job}", check=False)
+        if stale.exists():
+            stale.unlink()
     for job in JOBS:
         path = plist_path(job, directory)
         path.write_bytes(render_plist(job, talon_bin, data_dir))
@@ -159,7 +173,7 @@ def install(
 def uninstall(*, directory: Path | None = None, run_launchctl: bool = True) -> list[Path]:
     directory = directory or agents_dir()
     removed: list[Path] = []
-    for job in JOBS:
+    for job in (*JOBS, *REMOVED_JOBS):
         path = plist_path(job, directory)
         if run_launchctl:
             _launchctl("bootout", f"gui/{os.getuid()}/{LABEL_PREFIX}{job}", check=False)

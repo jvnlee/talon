@@ -42,11 +42,15 @@ from talon.data.store import (
     INDICATOR_MINUTE,
     MINUTE_CANDLES,
     STOCK_INFO,
+    US_KR_MAP,
+    US_KR_MAP_NAME,
     DatePartitionedStore,
     ParquetStore,
 )
+from talon.data.uskrmap import build_us_kr_map
 from talon.errors import TalonError
 from talon.factors.engine import warmup_periods
+from talon.ingest.briefing import run_briefing_snapshot
 from talon.ingest.close_auction import run_close_auction
 from talon.ingest.collect import bootstrap_universe, run_collect
 from talon.ingest.eod import run_eod
@@ -54,10 +58,13 @@ from talon.ingest.history import backfill_daily
 from talon.ingest.intraday import SLOTS, run_intraday
 from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
 from talon.ingest.overtime import run_overtime
-from talon.ingest.usnight import run_us_night
+from talon.ingest.us_calendar import run_us_calendar
+from talon.ingest.us_eod import run_us_eod
 from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
 from talon.markets.kr import krx_calendar
+from talon.markets.us import us_calendar
+from talon.models import UsMapSummary
 from talon.notify.telegram import Alerter, TelegramNotifier
 from talon.quant.core import QuantCore, RegimeAssessor, closed_trades_frame
 from talon.quant.regime import BreadthRegimeFilter, FullExposureRegime
@@ -251,18 +258,95 @@ def overtime(force: bool) -> None:
         sys.exit(1)
 
 
-@main.command("us-night")
-def us_night() -> None:
+@main.command("us-eod")
+@click.option("--full", is_flag=True)
+def us_eod(full: bool) -> None:
     cfg = load_settings()
-    with job_lock(cfg.locks_dir / "us-night.lock") as acquired:
+    with job_lock(cfg.locks_dir / "us-eod.lock") as acquired:
         if not acquired:
-            click.echo("us-night가 이미 실행 중입니다")
+            click.echo("us-eod가 이미 실행 중입니다")
             return
         with runtime(cfg, toss="skip") as rt:
-            summary = run_us_night(cfg, state=rt.state, series=rt.series, alerter=rt.alerter)
+            summary = run_us_eod(
+                cfg,
+                uscal=us_calendar(),
+                state=rt.state,
+                series=rt.series,
+                alerter=rt.alerter,
+                full=full,
+            )
     click.echo(summary.model_dump_json())
     if summary.status == "error":
         sys.exit(1)
+
+
+@main.command("us-calendar")
+@click.option("--backfill", is_flag=True)
+@click.option("--date", "day_text", default=None, help="YYYY-MM-DD")
+def us_calendar_command(backfill: bool, day_text: str | None) -> None:
+    cfg = load_settings()
+    day = date.fromisoformat(day_text) if day_text else None
+    with job_lock(cfg.locks_dir / "us-calendar.lock") as acquired:
+        if not acquired:
+            click.echo("us-calendar가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = run_us_calendar(
+                cfg,
+                cal=rt.cal,
+                uscal=us_calendar(),
+                state=rt.state,
+                snapshots=rt.snapshots,
+                series=rt.series,
+                alerter=rt.alerter,
+                today=day,
+                backfill=backfill,
+            )
+    click.echo(summary.model_dump_json())
+    if summary.status == "error":
+        sys.exit(1)
+
+
+@main.command("briefing-snapshot")
+@click.option("--force", is_flag=True)
+def briefing_snapshot(force: bool) -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "briefing-snapshot.lock") as acquired:
+        if not acquired:
+            click.echo("briefing-snapshot이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = run_briefing_snapshot(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                alerter=rt.alerter,
+                force=force,
+            )
+    click.echo(summary.model_dump_json())
+    if summary.status == "error":
+        sys.exit(1)
+
+
+@main.command("us-map")
+def us_map() -> None:
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        frame = build_us_kr_map()
+        known: set[str] = set()
+        latest_info = rt.snapshots.latest(STOCK_INFO)
+        if latest_info is not None:
+            known = set(latest_info[1]["symbol"].to_list())
+        mapped = {
+            symbol
+            for symbols in frame["kr_symbols"].to_list()
+            for symbol in symbols
+        }
+        unknown = sorted(mapped - known) if known else []
+        rt.series.replace(US_KR_MAP, US_KR_MAP_NAME, frame)
+        summary = UsMapSummary(status="ok", rows=frame.height, unknown=unknown)
+    click.echo(summary.model_dump_json())
 
 
 @main.group()

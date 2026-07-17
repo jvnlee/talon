@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -17,14 +18,23 @@ INDICATOR_SYMBOLS = (
     "KR_BOND_30Y",
 )
 
-US_NIGHT_SYMBOLS = (
+US_EOD_SYMBOLS = (
+    "^GSPC",
+    "^IXIC",
+    "^SOX",
+    "^DJI",
+    "^RUT",
+    "NVDA",
+    "MU",
+    "TSM",
+    "TSLA",
+    "AVGO",
+    "AMD",
+    "MRVL",
+    "AAPL",
     "SKHY",
     "EWY",
-    "SPY",
-    "QQQ",
-    "SOXX",
-    "MU",
-    "NVDA",
+    "CPNG",
     "PKX",
     "KB",
     "SHG",
@@ -35,6 +45,18 @@ US_NIGHT_SYMBOLS = (
     "KEP",
     "GRVY",
     "WBTN",
+)
+
+US_EARNINGS_SYMBOLS = (
+    "NVDA",
+    "MU",
+    "TSM",
+    "TSLA",
+    "AVGO",
+    "AMD",
+    "MRVL",
+    "AAPL",
+    "SKHY",
 )
 
 CsvList = Annotated[list[str], NoDecode]
@@ -84,7 +106,15 @@ class TalonSettings(BaseSettings):
 
     indicator_minute_symbols: CsvList = ["KOSPI", "KOSDAQ"]
     indicator_daily_symbols: CsvList = list(INDICATOR_SYMBOLS)
-    us_night_symbols: CsvList = list(US_NIGHT_SYMBOLS)
+    us_eod_symbols: CsvList = list(US_EOD_SYMBOLS)
+    us_earnings_symbols: CsvList = list(US_EARNINGS_SYMBOLS)
+    us_backfill_start: date = date(2015, 1, 1)
+    us_eod_overlap_days: int = 10
+    us_events_forward_days: int = 40
+    us_earnings_forward_days: int = 45
+    us_source_throttle_seconds: float = 0.5
+
+    fred_api_key: str = ""
 
     collect_max_pages: int = 30
     collect_pre_open_minutes: int = 5
@@ -105,7 +135,8 @@ class TalonSettings(BaseSettings):
         "pinned_symbols",
         "indicator_minute_symbols",
         "indicator_daily_symbols",
-        "us_night_symbols",
+        "us_eod_symbols",
+        "us_earnings_symbols",
         mode="before",
     )
     @classmethod
