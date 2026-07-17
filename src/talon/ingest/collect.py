@@ -85,14 +85,14 @@ def run_collect(
         log.exception("collect failed")
         state.heartbeat("collect", False, {"error": str(exc)})
         state.finish_job(run_id, False, {"error": str(exc)})
-        alerter.alert("collect-error", f"분봉 수집 실패: {exc}")
+        alerter.error("collect-error", f"분봉 수집 실패: {exc}")
         return CollectSummary(status="error")
 
     ok = summary.status == "ok"
     state.heartbeat("collect", ok, summary.model_dump(mode="json"))
     state.finish_job(run_id, ok, summary.model_dump(mode="json"))
     if not ok:
-        alerter.alert(
+        alerter.warning(
             "collect-degraded",
             f"분봉 수집 실패 종목 {len(summary.failed)}/{summary.symbols}: "
             f"{', '.join(summary.failed[:10])}",

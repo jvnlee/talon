@@ -66,7 +66,7 @@ def run_eod(
         log.exception("eod failed")
         state.heartbeat("eod", False, {"error": str(exc), "steps": steps})
         state.finish_job(run_id, False, {"error": str(exc), "steps": steps})
-        alerter.alert("eod-error", f"{day} EOD 잡 실패: {exc}")
+        alerter.error("eod-error", f"{day} EOD 잡 실패: {exc}")
         return EodSummary(status="error", day=day, steps=steps)
 
     ok = summary.status == "ok"
@@ -74,7 +74,7 @@ def run_eod(
     state.heartbeat("eod", ok, detail)
     state.finish_job(run_id, ok, detail)
     if summary.status == "data-not-ready":
-        alerter.alert("eod-empty", f"{day} 일봉 데이터를 어느 소스에서도 확보하지 못했습니다")
+        alerter.error("eod-empty", f"{day} 일봉 데이터를 어느 소스에서도 확보하지 못했습니다")
     return summary
 
 
@@ -116,14 +116,14 @@ def _run_eod_steps(
         universe_size = len(build.symbols)
         steps["universe"] = f"{universe_size} symbols"
         if not build.criteria["admin_excluded"]:
-            alerter.alert(
+            alerter.warning(
                 "admin-list-unavailable",
                 f"{day} 관리종목 목록을 받지 못해 KOSPI 관리종목을 거르지 못했습니다 "
                 "(코스닥 관리종목은 KRX 공식 분류로 계속 걸립니다)",
             )
     except SourceError as exc:
         steps["universe"] = f"error: {exc}"
-        alerter.alert("universe-error", f"{day} 유니버스 갱신 실패: {exc}")
+        alerter.error("universe-error", f"{day} 유니버스 갱신 실패: {exc}")
 
     status = "ok" if universe_size > 0 else "degraded"
     return EodSummary(status=status, day=day, steps=steps, universe_size=universe_size)
@@ -151,7 +151,7 @@ def _load_daily_snapshots(
             caps = caps_frame if not caps_frame.is_empty() else None
         except SourceError as exc:
             steps["marketcap"] = f"error: {exc}"
-            alerter.alert("marketcap-error", f"{day} 시가총액 수집 실패: {exc}")
+            alerter.warning("marketcap-error", f"{day} 시가총액 수집 실패: {exc}")
         return ohlcv, caps, "pykrx"
 
     try:
@@ -167,7 +167,7 @@ def _load_daily_snapshots(
         steps["fdr_listing"] = "stale-or-mismatch"
         return empty, None, "none"
     suffix = "" if verdict else " (분봉 대조 검증 불가)"
-    alerter.alert(
+    alerter.warning(
         "eod-fallback",
         f"{day} 일봉을 pykrx 대신 FDR 전종목 스냅샷으로 적재했습니다{suffix}",
     )
@@ -304,6 +304,6 @@ def _run_crosscheck(
         lines = ", ".join(
             f"{d.symbol}.{d.field} {d.ours:g}≠{d.theirs:g}" for d in result.discrepancies[:5]
         )
-        alerter.alert("crosscheck-mismatch", f"{day} pykrx/FDR 정합성 불일치: {lines}")
+        alerter.warning("crosscheck-mismatch", f"{day} pykrx/FDR 정합성 불일치: {lines}")
     if result.checked == 0 and result.errors:
-        alerter.alert("crosscheck-degraded", f"{day} FDR 크로스체크 불가: {result.errors[0]}")
+        alerter.warning("crosscheck-degraded", f"{day} FDR 크로스체크 불가: {result.errors[0]}")

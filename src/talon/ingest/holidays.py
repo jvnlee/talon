@@ -51,9 +51,9 @@ def sync_holidays(
         krx_calendar.cache_clear()
     if added:
         listed = ", ".join(f"{day} {merged[day]}" for day in added)
-        alerter.alert("holiday-sync-added", f"휴장일 캘린더에 반영했습니다: {listed}")
+        alerter.info("holiday-sync-added", f"휴장일 캘린더에 반영했습니다: {listed}")
     if errors:
-        alerter.alert("holiday-sync-error", f"휴장일 동기화 실패: {errors[0]}")
+        alerter.error("holiday-sync-error", f"휴장일 동기화 실패: {errors[0]}")
 
     status = "error" if errors and not fetched else ("partial" if errors else "ok")
     summary = HolidaySyncSummary(

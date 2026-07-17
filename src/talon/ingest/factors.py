@@ -146,7 +146,7 @@ def build_factors(
     state.heartbeat("adjust-build", status == "ok", detail)
     state.finish_job(run_id, status == "ok", detail)
     if failed and alerter is not None:
-        alerter.alert(
+        alerter.warning(
             "adjust-failed",
             f"수정계수 산출 실패 {len(failed)}종목: {', '.join(failed[:5])}",
         )

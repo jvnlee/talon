@@ -185,16 +185,16 @@ def _notify(
     errors: list[ReconcileDay],
 ) -> None:
     for day in filled:
-        alerter.alert(
+        alerter.info(
             f"reconcile-filled-{day.day}",
             f"{day.day} 누락 일봉을 KRX 공식 데이터로 채웠습니다 ({day.rows}종목)",
         )
     for day in corrected:
         detail = ", ".join(f"{field} {count}종목" for field, count in day.corrections.items())
         extra = f", 신규 {day.added}종목" if day.added else ""
-        alerter.alert(
+        alerter.info(
             f"reconcile-corrected-{day.day}",
             f"{day.day} 일봉을 KRX 공식 데이터로 교정했습니다: {detail}{extra}",
         )
     if errors:
-        alerter.alert("reconcile-error", f"KRX 공식 대조 실패: {errors[0].detail}")
+        alerter.error("reconcile-error", f"KRX 공식 대조 실패: {errors[0].detail}")

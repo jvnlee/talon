@@ -94,11 +94,20 @@ class Alerter:
         self._state = state
         self._cooldown = cooldown
 
-    def alert(self, key: str, text: str) -> bool:
+    def error(self, key: str, text: str) -> bool:
+        return self._alert("오류", key, text)
+
+    def warning(self, key: str, text: str) -> bool:
+        return self._alert("경고", key, text)
+
+    def info(self, key: str, text: str) -> bool:
+        return self._alert("알림", key, text)
+
+    def _alert(self, kind: str, key: str, text: str) -> bool:
         if not self._state.should_alert(key, self._cooldown):
             log.info("alert suppressed by cooldown: %s", key)
             return False
-        if self._notifier.send(f"[talon] {text}"):
+        if self._notifier.send(f"[{kind}] {text}"):
             self._state.mark_alerted(key)
             return True
         return False

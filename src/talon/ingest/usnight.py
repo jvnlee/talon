@@ -54,9 +54,9 @@ def run_us_night(
     state.heartbeat(JOB, ok, detail)
     state.finish_job(run_id, ok, detail)
     if status == "error":
-        alerter.alert("us-night-error", f"미국 밤장 적재가 전부 실패했습니다 ({len(targets)}종목)")
+        alerter.error("us-night-error", f"미국 밤장 적재가 전부 실패했습니다 ({len(targets)}종목)")
     elif failed:
-        alerter.alert(
+        alerter.warning(
             "us-night-partial",
             f"미국 밤장 적재 일부 실패: {', '.join(failed[:5])}",
         )

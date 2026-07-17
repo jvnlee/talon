@@ -45,11 +45,11 @@ def run_close_auction(
     if not force and not cal.is_trading_day(day):
         return CloseAuctionSummary(status="skipped-holiday", day=day)
     if not cfg.kis_configured:
-        alerter.alert("close-auction-no-kis", "KIS 앱키가 없어 종가 예상체결을 못 받습니다")
+        alerter.error("close-auction-no-kis", "KIS 앱키가 없어 종가 예상체결을 못 받습니다")
         return CloseAuctionSummary(status="no-kis", day=day)
     symbols = auction_symbols(cfg, snapshots, day)
     if not symbols:
-        alerter.alert(
+        alerter.error(
             "close-auction-no-universe",
             f"{day} 15:10 스냅샷도 pinned 종목도 없어 종가 예상체결을 못 받습니다",
         )
@@ -78,18 +78,18 @@ def run_close_auction(
     stored = sum(summary.rows.values())
     if len(missed) == len(PASSES):
         summary.status = "missed"
-        alerter.alert(
+        alerter.error(
             "close-auction-missed",
             f"{day} 종가 예상체결 잡이 너무 늦게 떠서 동시호가 패스를 전부 놓쳤습니다",
         )
     elif stored == 0:
         summary.status = "error"
-        alerter.alert(
+        alerter.error(
             "close-auction-error",
             f"{day} 종가 예상체결이 한 행도 안 남았습니다: {summary.passes}",
         )
     elif errors or missed:
-        alerter.alert(
+        alerter.warning(
             "close-auction-partial",
             f"{day} 종가 예상체결 일부 패스 누락: "
             f"실패 {errors or '없음'} / 놓침 {missed or '없음'}",

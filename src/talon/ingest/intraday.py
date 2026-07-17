@@ -40,7 +40,7 @@ def run_intraday(
     if not force and not cal.is_trading_day(day):
         return IntradaySummary(status="skipped-holiday", day=day, slot=slot)
     if not cfg.krx_login_configured:
-        alerter.alert("intraday-no-credentials", "KRX 로그인 정보가 없어 장중 스냅샷을 못 받습니다")
+        alerter.error("intraday-no-credentials", "KRX 로그인 정보가 없어 장중 스냅샷을 못 받습니다")
         return IntradaySummary(status="no-credentials", day=day, slot=slot)
 
     run_id = state.start_job("intraday")
@@ -54,13 +54,13 @@ def run_intraday(
         log.exception("intraday snapshot failed")
         status = "error"
         detail["error"] = str(exc)
-        alerter.alert("intraday-error", f"{day} {slot} 장중 스냅샷 실패: {exc}")
+        alerter.error("intraday-error", f"{day} {slot} 장중 스냅샷 실패: {exc}")
     else:
         if frame.height < MIN_ROWS:
             status = "data-not-ready"
             rows = frame.height
             detail["rows"] = frame.height
-            alerter.alert(
+            alerter.error(
                 "intraday-empty",
                 f"{day} {slot} 장중 스냅샷이 {frame.height}종목뿐입니다 "
                 "(KRX가 아직 안 채웠거나 막혔습니다)",
@@ -85,7 +85,7 @@ def run_intraday(
         name for name, part_status in pulse.parts.items() if part_status.startswith("error")
     )
     if failed_parts:
-        alerter.alert(
+        alerter.warning(
             "intraday-extras",
             f"{day} {slot} 부가 수집 실패: {', '.join(failed_parts)}",
         )

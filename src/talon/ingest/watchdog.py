@@ -89,23 +89,23 @@ def run_watchdog(
         last_beat = heartbeat.ts if heartbeat is not None else collector_active_since
         if now - max(last_beat, collector_active_since) > stale_after:
             issues.append("collect-stale")
-            alerter.alert(
+            alerter.error(
                 "collect-stale",
                 f"분봉 수집기가 {cfg.heartbeat_stale_minutes}분 이상 응답이 없습니다",
             )
         failures = state.consecutive_failures("collect")
         if failures >= 2:
             issues.append("collect-failing")
-            alerter.alert("collect-failing", f"분봉 수집이 연속 {failures}회 실패했습니다")
+            alerter.error("collect-failing", f"분봉 수집이 연속 {failures}회 실패했습니다")
 
     if kst_now.time() >= EOD_DEADLINE and not snapshots.has_date(DAILY_CANDLES, day):
         issues.append("eod-missing")
-        alerter.alert("eod-missing", f"{day} 일봉 EOD 스냅샷이 아직 없습니다")
+        alerter.error("eod-missing", f"{day} 일봉 EOD 스냅샷이 아직 없습니다")
 
     stale, as_of = _stock_info_stale(snapshots, day, cfg.universe_info_max_stale_days)
     if stale:
         issues.append("stock-info-stale")
-        alerter.alert(
+        alerter.error(
             "stock-info-stale",
             f"종목기본정보가 {as_of or '없음'} 기준입니다 — 유니버스 갱신이 멈춥니다 "
             "(reconcile 잡과 talon stock-info backfill 확인)",
@@ -116,7 +116,7 @@ def run_watchdog(
         if behind is not None:
             latest_daily, latest_factor = behind
             issues.append("factors-stale")
-            alerter.alert(
+            alerter.error(
                 "factors-stale",
                 f"수정계수가 일봉을 못 따라갑니다 (일봉 {latest_daily}, "
                 f"계수 {latest_factor or '없음'}) — 백테스트 패널에서 해당 일자가 조용히 빠집니다",

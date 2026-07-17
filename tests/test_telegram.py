@@ -56,11 +56,14 @@ def test_alerter_cooldown(state):
 
     notifier = make_notifier(handler)
     alerter = Alerter(notifier, state, timedelta(hours=1))
-    assert alerter.alert("key", "첫 알림")
-    assert not alerter.alert("key", "중복 알림")
-    assert alerter.alert("other", "다른 키")
-    assert len(sent) == 2
-    assert "[talon]" in sent[0]
+    assert alerter.error("key", "첫 알림")
+    assert not alerter.error("key", "중복 알림")
+    assert alerter.info("other", "다른 키")
+    assert alerter.warning("third", "부분 실패")
+    assert len(sent) == 3
+    assert "[오류]" in sent[0]
+    assert "[알림]" in sent[1]
+    assert "[경고]" in sent[2]
 
 
 def test_alerter_failed_send_not_marked(state):
@@ -69,7 +72,7 @@ def test_alerter_failed_send_not_marked(state):
 
     notifier = make_notifier(handler)
     alerter = Alerter(notifier, state, timedelta(hours=1))
-    assert not alerter.alert("key", "실패")
+    assert not alerter.error("key", "실패")
     assert state.should_alert("key", timedelta(hours=1))
 
 
