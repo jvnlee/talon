@@ -67,6 +67,9 @@ class TalonSettings(BaseSettings):
     kis_base_url: str = "https://openapi.koreainvestment.com:9443"
     kis_rps: float = 8.0
     kis_sweep_size: int = 300
+    kis_workers: int = 8
+    kis_penalty_rps: float = 2.0
+    kis_penalty_seconds: float = 30.0
 
     krx_id: str = ""
     krx_password: str = ""
@@ -155,6 +158,10 @@ class TalonSettings(BaseSettings):
     @property
     def kis_token_path(self) -> Path:
         return self.data_dir / "cache" / "kis_token.json"
+
+    @property
+    def kis_pacer_path(self) -> Path:
+        return self.locks_dir / "kis-pacer.json"
 
     @property
     def krx_openapi_configured(self) -> bool:

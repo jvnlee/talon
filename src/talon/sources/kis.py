@@ -1,16 +1,21 @@
+import fcntl
 import json
 import logging
 import os
 import stat
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from talon.errors import SourceError
+
+if TYPE_CHECKING:
+    from talon.config import TalonSettings
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +26,77 @@ RATE_LIMIT_CODES = {"EGW00201"}
 TOKEN_EXPIRED_CODES = {"EGW00123"}
 TOKEN_THROTTLED_CODES = {"EGW00133"}
 MAX_ATTEMPTS = 3
+PACER_CLAMP_SECONDS = 60.0
+
+
+class RatePacer:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        rps: float,
+        penalty_rps: float,
+        penalty_seconds: float,
+        clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._path = path
+        self._interval = 1.0 / rps if rps > 0 else 0.0
+        self._penalty_interval = 1.0 / penalty_rps if penalty_rps > 0 else 0.0
+        self._penalty_seconds = penalty_seconds
+        self._clock = clock
+        self._sleep = sleep
+
+    def acquire(self) -> None:
+        slot = self._claim_slot()
+        wait = slot - self._clock()
+        if wait > 0:
+            self._sleep(wait)
+
+    def report_rate_limit(self) -> None:
+        def update(state: dict[str, float], now: float) -> None:
+            state["penalty_until"] = max(state["penalty_until"], now + self._penalty_seconds)
+
+        self._mutate(update)
+
+    def _claim_slot(self) -> float:
+        slot = 0.0
+
+        def update(state: dict[str, float], now: float) -> None:
+            nonlocal slot
+            interval = self._penalty_interval if now < state["penalty_until"] else self._interval
+            slot = max(now, state["next_at"])
+            if slot - now > PACER_CLAMP_SECONDS:
+                slot = now
+            state["next_at"] = slot + interval
+
+        self._mutate(update)
+        return slot
+
+    def _mutate(self, update: Callable[[dict[str, float], float], None]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.touch(exist_ok=True)
+        with open(self._path, "r+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                state = self._parse(handle.read())
+                update(state, self._clock())
+                handle.seek(0)
+                handle.truncate()
+                json.dump(state, handle)
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+    @staticmethod
+    def _parse(text: str) -> dict[str, float]:
+        try:
+            raw = json.loads(text)
+            return {
+                "next_at": float(raw["next_at"]),
+                "penalty_until": float(raw["penalty_until"]),
+            }
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return {"next_at": 0.0, "penalty_until": 0.0}
 
 
 class KisClient:
@@ -37,6 +113,7 @@ class KisClient:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = datetime.now,
+        pacer: RatePacer | None = None,
     ) -> None:
         if not (app_key and app_secret):
             raise SourceError("KIS 앱키가 없습니다 (TALON_KIS_APP_KEY / TALON_KIS_APP_SECRET)")
@@ -47,8 +124,10 @@ class KisClient:
         self._sleep = sleep
         self._clock = clock
         self._now = now
+        self._pacer = pacer
         self._last_call: float | None = None
         self._token: str | None = None
+        self._token_lock = threading.Lock()
         self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
 
     def close(self) -> None:
@@ -61,13 +140,17 @@ class KisClient:
         self.close()
 
     def token(self) -> str:
-        if self._token is not None:
-            return self._token
-        cached = self._read_cached_token()
-        if cached is not None:
-            self._token = cached
-            return cached
-        return self._issue_token()
+        token = self._token
+        if token is not None:
+            return token
+        with self._token_lock:
+            if self._token is not None:
+                return self._token
+            cached = self._read_cached_token()
+            if cached is not None:
+                self._token = cached
+                return cached
+            return self._issue_token()
 
     def _read_cached_token(self) -> str | None:
         if not self._token_path.exists():
@@ -130,7 +213,16 @@ class KisClient:
         )
         os.chmod(self._token_path, stat.S_IRUSR | stat.S_IWUSR)
 
+    def _refresh_token(self, stale: str) -> None:
+        with self._token_lock:
+            if self._token == stale:
+                self._token = None
+                self._issue_token()
+
     def _throttle(self) -> None:
+        if self._pacer is not None:
+            self._pacer.acquire()
+            return
         if self._last_call is not None:
             elapsed = self._clock() - self._last_call
             wait = self._min_interval - elapsed
@@ -138,9 +230,9 @@ class KisClient:
                 self._sleep(wait)
         self._last_call = self._clock()
 
-    def _headers(self, tr_id: str, tr_cont: str = "") -> dict[str, str]:
+    def _headers(self, tr_id: str, tr_cont: str, token: str) -> dict[str, str]:
         return {
-            "authorization": f"Bearer {self.token()}",
+            "authorization": f"Bearer {token}",
             "appkey": self._app_key,
             "appsecret": self._app_secret,
             "tr_id": tr_id,
@@ -159,9 +251,10 @@ class KisClient:
         last_error = ""
         for attempt in range(MAX_ATTEMPTS):
             self._throttle()
+            token = self.token()
             try:
                 response = self._client.get(
-                    path, params=params, headers=self._headers(tr_id, tr_cont)
+                    path, params=params, headers=self._headers(tr_id, tr_cont, token)
                 )
             except httpx.HTTPError as exc:
                 raise SourceError(f"KIS 요청 실패: {exc}") from exc
@@ -175,14 +268,16 @@ class KisClient:
                 return payload
             msg_cd = str(payload.get("msg_cd") or "")
             msg = str(payload.get("msg1") or "").strip()
-            if msg_cd in RATE_LIMIT_CODES and attempt < MAX_ATTEMPTS - 1:
-                last_error = f"{msg_cd} {msg}"
-                self._sleep(1.0 * (attempt + 1))
-                continue
+            if msg_cd in RATE_LIMIT_CODES:
+                if self._pacer is not None:
+                    self._pacer.report_rate_limit()
+                if attempt < MAX_ATTEMPTS - 1:
+                    last_error = f"{msg_cd} {msg}"
+                    self._sleep(1.0 * (attempt + 1))
+                    continue
             if msg_cd in TOKEN_EXPIRED_CODES and attempt < MAX_ATTEMPTS - 1:
                 last_error = f"{msg_cd} {msg}"
-                self._token = None
-                self._issue_token()
+                self._refresh_token(token)
                 continue
             raise SourceError(f"KIS 응답 오류: {msg_cd} {msg} (tr_id={tr_id})")
         raise SourceError(f"KIS 요청 재시도 소진 (tr_id={tr_id}): {last_error}")
@@ -195,3 +290,21 @@ class KisClient:
             raise SourceError(
                 f"KIS 응답이 JSON이 아닙니다 (HTTP {response.status_code})"
             ) from exc
+
+
+def build_kis_client(cfg: "TalonSettings") -> KisClient:
+    pacer = RatePacer(
+        cfg.kis_pacer_path,
+        rps=cfg.kis_rps,
+        penalty_rps=cfg.kis_penalty_rps,
+        penalty_seconds=cfg.kis_penalty_seconds,
+    )
+    return KisClient(
+        cfg.kis_app_key,
+        cfg.kis_app_secret,
+        base_url=cfg.kis_base_url,
+        token_path=cfg.kis_token_path,
+        rps=cfg.kis_rps,
+        timeout=cfg.request_timeout,
+        pacer=pacer,
+    )

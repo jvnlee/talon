@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from talon.errors import SourceError
-from talon.sources.kis import KisClient
+from talon.sources.kis import KisClient, RatePacer
 
 NOW = datetime(2026, 7, 15, 12, 0, 0)
 VALID_EXPIRY = "2026-07-16 11:59:59"
@@ -186,3 +186,34 @@ def test_throttle_paces_consecutive_calls(tmp_path):
 def test_missing_keys_are_rejected(tmp_path):
     with pytest.raises(SourceError, match="앱키"):
         KisClient("", "", base_url="https://kis.test", token_path=tmp_path / "t.json")
+
+
+def test_rate_limited_call_slows_the_shared_pacer(tmp_path):
+    clock = {"now": 1000.0}
+    paced = []
+
+    def advance(seconds):
+        paced.append(seconds)
+        clock["now"] += seconds
+
+    pacer = RatePacer(
+        tmp_path / "pacer.json",
+        rps=8.0,
+        penalty_rps=2.0,
+        penalty_seconds=30.0,
+        clock=lambda: clock["now"],
+        sleep=advance,
+    )
+    recorder = Recorder(
+        quote_responses=[
+            httpx.Response(200, json={"rt_cd": "1", "msg_cd": "EGW00201", "msg1": "초당 초과"}),
+            httpx.Response(200, json={"rt_cd": "0", "output": {"ok": "1"}}),
+        ]
+    )
+    with make_client(tmp_path, recorder, pacer=pacer) as client:
+        payload = client.get("/quote", "TR1", {})
+
+    assert payload["output"]["ok"] == "1"
+    state = json.loads((tmp_path / "pacer.json").read_text())
+    assert state["penalty_until"] == pytest.approx(1030.0)
+    assert 0.125 in paced
