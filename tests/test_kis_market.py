@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import httpx
 
@@ -10,6 +11,8 @@ from talon.sources.kis_market import (
     fetch_investor_estimate,
     fetch_member,
     fetch_orderbook,
+    fetch_overseas_daily,
+    fetch_overseas_index_daily,
     fetch_overtime_price,
     fetch_overtime_ranking,
     fetch_program_market,
@@ -615,3 +618,49 @@ def test_overtime_ranking_uses_ranking_path_and_div_code(tmp_path):
     assert seen["path"] == "/uapi/domestic-stock/v1/ranking/overtime-fluctuation"
     assert seen["params"]["FID_DIV_CLS_CODE"] == "5"
     assert seen["params"]["FID_INPUT_ISCD"] == "0000"
+
+
+def test_overseas_daily_parses_and_sorts(tmp_path):
+    payload = {
+        "rt_cd": "0",
+        "output1": {"rsym": "DNASNVDA"},
+        "output2": [
+            {"xymd": "20260717", "clos": "204.92", "open": "202.40", "high": "206.20",
+             "low": "197.97", "tvol": "150000000"},
+            {"xymd": "20260716", "clos": "207.40", "open": "205.00", "high": "208.00",
+             "low": "204.10", "tvol": "140000000"},
+            {"xymd": "", "clos": "1.0"},
+        ],
+    }
+    client = make_client(
+        tmp_path, {"/uapi/overseas-price/v1/quotations/dailyprice": payload}
+    )
+
+    rows = fetch_overseas_daily(client, "NAS", "NVDA")
+
+    assert [row["day"].isoformat() for row in rows] == ["2026-07-16", "2026-07-17"]
+    assert rows[-1]["close"] == 204.92
+    assert rows[-1]["volume"] == 150000000.0
+
+
+def test_overseas_index_daily_parses(tmp_path):
+    payload = {
+        "rt_cd": "0",
+        "output1": {"hts_kor_isnm": "S&P500"},
+        "output2": [
+            {"stck_bsop_date": "20260717", "ovrs_nmix_prpr": "7533.77",
+             "ovrs_nmix_oprc": "7500.00", "ovrs_nmix_hgpr": "7550.00",
+             "ovrs_nmix_lwpr": "7480.00", "acml_vol": "0"},
+        ],
+    }
+    client = make_client(
+        tmp_path, {"/uapi/overseas-price/v1/quotations/inquire-daily-chartprice": payload}
+    )
+
+    rows = fetch_overseas_index_daily(
+        client, "SPX", date(2026, 7, 1), date(2026, 7, 17)
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["day"] == date(2026, 7, 17)
+    assert rows[0]["close"] == 7533.77

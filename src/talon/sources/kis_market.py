@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 from typing import Any
 
 from talon.sources.kis import KisClient
@@ -28,6 +29,10 @@ OVERTIME_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-overtime-price
 OVERTIME_PRICE_TR = "FHPST02300000"
 OVERTIME_RANKING_PATH = "/uapi/domestic-stock/v1/ranking/overtime-fluctuation"
 OVERTIME_RANKING_TR = "FHPST02340000"
+OVERSEAS_DAILY_PATH = "/uapi/overseas-price/v1/quotations/dailyprice"
+OVERSEAS_DAILY_TR = "HHDFS76240000"
+OVERSEAS_INDEX_PATH = "/uapi/overseas-price/v1/quotations/inquire-daily-chartprice"
+OVERSEAS_INDEX_TR = "FHKST03030100"
 
 RANKING_SIDES = {"buy": "0", "sell": "1"}
 OVERTIME_RANKING_SIDES = {"up": "2", "down": "5"}
@@ -443,3 +448,78 @@ def fetch_overtime_ranking(client: KisClient, side: str) -> dict[str, Any]:
                 }
             )
     return {"market": market, "rows": records}
+
+
+def _parse_yyyymmdd(value: Any) -> date | None:
+    text = _text(value)
+    if text is None or len(text) != 8 or not text.isdigit():
+        return None
+    return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
+
+
+def fetch_overseas_daily(client: KisClient, excd: str, symbol: str) -> list[dict[str, Any]]:
+    payload = client.get(
+        OVERSEAS_DAILY_PATH,
+        OVERSEAS_DAILY_TR,
+        {"AUTH": "", "EXCD": excd, "SYMB": symbol, "GUBN": "0", "BYMD": "", "MODP": "1"},
+    )
+    rows = payload.get("output2")
+    if not isinstance(rows, list):
+        return []
+    records = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        day = _parse_yyyymmdd(row.get("xymd"))
+        close = _num(row.get("clos"))
+        if day is None or close is None:
+            continue
+        records.append(
+            {
+                "day": day,
+                "open": _num(row.get("open")),
+                "high": _num(row.get("high")),
+                "low": _num(row.get("low")),
+                "close": close,
+                "volume": _num(row.get("tvol")),
+            }
+        )
+    return sorted(records, key=lambda record: record["day"])
+
+
+def fetch_overseas_index_daily(
+    client: KisClient, code: str, start: date, end: date
+) -> list[dict[str, Any]]:
+    payload = client.get(
+        OVERSEAS_INDEX_PATH,
+        OVERSEAS_INDEX_TR,
+        {
+            "FID_COND_MRKT_DIV_CODE": "N",
+            "FID_INPUT_ISCD": code,
+            "FID_INPUT_DATE_1": start.strftime("%Y%m%d"),
+            "FID_INPUT_DATE_2": end.strftime("%Y%m%d"),
+            "FID_PERIOD_DIV_CODE": "D",
+        },
+    )
+    rows = payload.get("output2")
+    if not isinstance(rows, list):
+        return []
+    records = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        day = _parse_yyyymmdd(row.get("stck_bsop_date"))
+        close = _num(row.get("ovrs_nmix_prpr"))
+        if day is None or close is None:
+            continue
+        records.append(
+            {
+                "day": day,
+                "open": _num(row.get("ovrs_nmix_oprc")),
+                "high": _num(row.get("ovrs_nmix_hgpr")),
+                "low": _num(row.get("ovrs_nmix_lwpr")),
+                "close": close,
+                "volume": _num(row.get("acml_vol")),
+            }
+        )
+    return sorted(records, key=lambda record: record["day"])
