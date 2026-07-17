@@ -369,6 +369,7 @@ def backfill_daily_command(years: int | None, start_text: str | None, end_text: 
 @click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
 def reconcile(days: int | None, start_text: str | None, end_text: str | None) -> None:
     """저장된 일봉을 KRX 공식 확정본(Open API)과 대조해 교정한다."""
+    from talon.ingest.holidays import sync_holidays
     from talon.ingest.reconcile import reconcile_daily
 
     cfg = load_settings()
@@ -379,6 +380,7 @@ def reconcile(days: int | None, start_text: str | None, end_text: str | None) ->
             click.echo("reconcile이 이미 실행 중입니다")
             return
         with runtime(cfg, toss="skip") as rt:
+            sync_holidays(cfg, state=rt.state, alerter=rt.alerter, today=_today_kst())
             end = (
                 date.fromisoformat(end_text)
                 if end_text
@@ -1500,6 +1502,39 @@ def delisting_refresh() -> None:
     counts = dict(registry.group_by("classification").len().iter_rows())
     breakdown = ", ".join(f"{key} {value}" for key, value in sorted(counts.items()))
     click.echo(f"상폐 레지스트리 {registry.height}건 적재 ({breakdown})")
+
+
+@main.group()
+def holidays() -> None:
+    """KRX 휴장일 캘린더 동기화."""
+
+
+@holidays.command("sync")
+def holidays_sync() -> None:
+    """KRX 시장정보의 연간 휴장일을 받아 휴장일 캘린더에 반영한다."""
+    from talon.ingest.holidays import sync_holidays
+
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        summary = sync_holidays(cfg, state=rt.state, alerter=rt.alerter, today=_today_kst())
+    click.echo(summary.model_dump_json())
+    if summary.status == "error":
+        sys.exit(1)
+
+
+@holidays.command("show")
+def holidays_show() -> None:
+    """저장된 휴장일 캘린더(정적 목록 + 동기화분)를 출력한다."""
+    from talon.markets.kr import CLOSURES_MISSING_FROM_XKRX, closures_path, load_stored_closures
+
+    cfg = load_settings()
+    closures = dict(CLOSURES_MISSING_FROM_XKRX)
+    closures |= load_stored_closures(closures_path(cfg.data_dir))
+    if not closures:
+        click.echo("등록된 휴장일이 없습니다")
+        return
+    for day, name in sorted(closures.items()):
+        click.echo(f"{day}\t{name}")
 
 
 @main.group()

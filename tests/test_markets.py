@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 from conftest import utc
+from talon.markets import kr
 from talon.markets.kr import KrxCalendar, second_thursday, within_session
 
 
@@ -51,6 +52,50 @@ def test_ad_hoc_closure_skipped_when_walking_sessions(cal):
         date(2026, 6, 4),
         date(2026, 6, 5),
     ]
+
+
+def test_constitution_day_2026_is_a_closure(cal):
+    assert cal.is_trading_day(date(2026, 7, 16))
+    assert not cal.is_trading_day(date(2026, 7, 17))
+    assert cal.latest_trading_day(date(2026, 7, 17)) == date(2026, 7, 16)
+    assert not within_session(cal, utc(2026, 7, 17, 3, 0))
+
+
+def test_stored_closures_round_trip(tmp_path):
+    path = kr.closures_path(tmp_path)
+    kr.save_stored_closures(path, {date(2026, 10, 5): "추석", date(2026, 7, 17): "제헌절"})
+    assert kr.load_stored_closures(path) == {
+        date(2026, 7, 17): "제헌절",
+        date(2026, 10, 5): "추석",
+    }
+
+
+def test_stored_closures_missing_file_is_empty(tmp_path):
+    assert kr.load_stored_closures(kr.closures_path(tmp_path)) == {}
+
+
+def test_stored_closures_ignore_corrupt_file(tmp_path):
+    path = kr.closures_path(tmp_path)
+    path.write_text("LOGOUT")
+    assert kr.load_stored_closures(path) == {}
+
+
+def test_stored_closures_skip_bad_dates(tmp_path):
+    path = kr.closures_path(tmp_path)
+    path.write_text('{"not-a-date": "x", "2026-07-17": "제헌절"}')
+    assert kr.load_stored_closures(path) == {date(2026, 7, 17): "제헌절"}
+
+
+def test_krx_calendar_merges_stored_closures(tmp_path, monkeypatch):
+    monkeypatch.setenv("TALON_DATA_DIR", str(tmp_path))
+    kr.save_stored_closures(kr.closures_path(tmp_path), {date(2026, 12, 24): "임시휴장"})
+    kr.krx_calendar.cache_clear()
+    try:
+        merged = kr.krx_calendar()
+        assert not merged.is_trading_day(date(2026, 12, 24))
+        assert not merged.is_trading_day(date(2026, 6, 3))
+    finally:
+        kr.krx_calendar.cache_clear()
 
 
 def test_second_thursday():

@@ -201,3 +201,11 @@ class AdjustSummary(BaseModel):
 class WatchdogSummary(BaseModel):
     status: str
     issues: list[str] = []
+
+
+class HolidaySyncSummary(BaseModel):
+    status: str
+    years: list[int] = []
+    known: int = 0
+    added: list[str] = []
+    errors: list[str] = []
