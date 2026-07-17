@@ -161,6 +161,22 @@ def test_vix_falls_back_to_fred(cfg, uscal, state, series, alerter):
     assert series.read(US_MACRO_DAILY, "VIX")["source"].to_list()[0] == "fred:VIXCLS"
 
 
+def test_fred_api_key_is_forwarded_to_macro_fetch(cfg, uscal, state, series, alerter):
+    cfg.us_eod_symbols = []
+    cfg.fred_api_key = "fred-key"
+    seen: dict[str, object] = {}
+
+    def macro(series_id, captured_at, **kw):
+        seen[series_id] = kw.get("api_key")
+        return good_macro(series_id, captured_at)
+
+    summary = run(cfg, uscal, state, series, alerter, lambda *a, **k: bars_frame([]), macro=macro)
+
+    assert summary.status == "ok"
+    assert seen["DGS2"] == "fred-key"
+    assert seen["DTWEXBGS"] == "fred-key"
+
+
 def test_total_failure_alerts(cfg, uscal, state, series, alerter, notifier):
     cfg.us_eod_symbols = ["AAA", "BBB"]
 

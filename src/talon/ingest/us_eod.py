@@ -171,7 +171,9 @@ def _collect_macro(
                     frame = fetch_vix(captured_at)
                 except Exception as exc:
                     log.warning("CBOE VIX 실패, FRED 폴백: %s", exc)
-                    frame = fetch_series(VIX_FALLBACK_SERIES, captured_at)
+                    frame = fetch_series(
+                        VIX_FALLBACK_SERIES, captured_at, api_key=cfg.fred_api_key
+                    )
             elif kind == "ecos":
                 if not cfg.ecos_api_key:
                     summary.macro[name] = "skipped-no-key"
@@ -183,7 +185,7 @@ def _collect_macro(
                     end=captured_at.astimezone(KST).date(),
                 )
             else:
-                frame = fetch_series(name, captured_at)
+                frame = fetch_series(name, captured_at, api_key=cfg.fred_api_key)
             series.replace(US_MACRO_DAILY, name, frame)
             last = frame["day"].max()
             if not isinstance(last, date):

@@ -12,6 +12,7 @@ from talon.errors import SourceError
 log = logging.getLogger(__name__)
 
 FREDGRAPH_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
 FRED_RELEASE_DATES_URL = "https://api.stlouisfed.org/fred/release/dates"
 CBOE_VIX_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv"
 FREDGRAPH_DATE_COLUMN = "observation_date"
@@ -26,6 +27,16 @@ def _get_text(url: str, params: dict[str, str], timeout: float, transport) -> st
     except httpx.HTTPError as exc:
         raise SourceError(f"요청 실패 ({url}): {exc}") from exc
     return response.text
+
+
+def _get_json(url: str, params: dict[str, str], timeout: float, transport) -> dict:
+    try:
+        with httpx.Client(timeout=timeout, transport=transport) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise SourceError(f"요청 실패 ({url}): {exc}") from exc
 
 
 def _macro_frame(rows: list[dict[str, object]], source: str, captured_at: datetime) -> pl.DataFrame:
@@ -55,13 +66,53 @@ def parse_fredgraph(text: str, series_id: str, captured_at: datetime) -> pl.Data
     return _macro_frame(rows, f"fred:{series_id}", captured_at)
 
 
-def fetch_fred_series(
+def parse_fred_observations(
+    payload: dict, series_id: str, captured_at: datetime
+) -> pl.DataFrame:
+    observations = payload.get("observations")
+    if observations is None:
+        raise SourceError(f"FRED {series_id} 응답에 observations가 없습니다: {payload}")
+    rows: list[dict[str, object]] = []
+    for entry in observations:
+        value = entry.get("value", "")
+        if value in ("", "."):
+            continue
+        rows.append({"day": date.fromisoformat(entry["date"]), "value": float(value)})
+    if not rows:
+        raise SourceError(f"FRED {series_id} 관측치가 한 건도 없습니다")
+    return _macro_frame(rows, f"fred:{series_id}", captured_at)
+
+
+def fetch_fred_observations(
     series_id: str,
+    api_key: str,
     captured_at: datetime,
     *,
     timeout: float = 30.0,
     transport: httpx.BaseTransport | None = None,
 ) -> pl.DataFrame:
+    if not api_key:
+        raise SourceError("FRED API 키가 없습니다 (TALON_FRED_API_KEY)")
+    params = {"series_id": series_id, "api_key": api_key, "file_type": "json"}
+    payload = _get_json(FRED_OBSERVATIONS_URL, params, timeout, transport)
+    return parse_fred_observations(payload, series_id, captured_at)
+
+
+def fetch_fred_series(
+    series_id: str,
+    captured_at: datetime,
+    *,
+    api_key: str = "",
+    timeout: float = 30.0,
+    transport: httpx.BaseTransport | None = None,
+) -> pl.DataFrame:
+    if api_key:
+        try:
+            return fetch_fred_observations(
+                series_id, api_key, captured_at, timeout=timeout, transport=transport
+            )
+        except SourceError as exc:
+            log.warning("FRED API 실패, fredgraph 폴백: %s (%s)", series_id, exc)
     text = _get_text(FREDGRAPH_URL, {"id": series_id}, timeout, transport)
     return parse_fredgraph(text, series_id, captured_at)
 
