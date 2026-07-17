@@ -430,3 +430,25 @@
 16. **저유동 종목 거래원 빈 슬롯 표현 미관측** 【미검증】: 1.6 거래원 5개 미만 종목의 빈 슬롯(회원사명/번호/수량)이 `""`인지 공백인지 `"0"`인지 미확인(테스트 종목 005930·247540은 5슬롯 다 참). 파서는 `_text`/`_num`이 빈문자열→None 처리하므로 안전하나 실측 확인 필요
 
 17. **전역 균일 페이싱 8/s의 실서버 수용 여부 미검증** 【미검증】: 2026-07-16 실측이 확정한 것은 "비조율 이중 순차(합산 ≈3.6콜/s)가 거절당한다"까지. 균일 간격이면 8/s가 통하는지(§2.2 원인 후보 ①) 또는 지속률 자체를 낮춰야 하는지(②·③)는 2026-07-20(월) 15:10 첫 병렬 실행에서 판별 — 판독 지표: `EGW00201` 페널티 발동 횟수(로그 WARNING), 파트별 행별 `captured_at` 스팬(8/s 수용 시 스윕 전체 ≈4분). 상시 페널티면 `kis_rps`를 4→2로 하향
+
+## 5. 해외시세 (2026-07-18 실측)
+
+기존 국내 실전 앱키로 별도 이용신청 없이 조회 확인. 전부 `rt_cd=0`.
+
+### 5.1 해외 개별주 일봉 — `/uapi/overseas-price/v1/quotations/dailyprice` (HHDFS76240000)
+
+- 입력: `AUTH=""`, `EXCD`(NAS/NYS/AMS 실측 확인), `SYMB`, `GUBN="0"`(일), `BYMD=""`(최신부터), `MODP="1"`(수정주가)
+- `output2[]`: `xymd`(YYYYMMDD)·`clos`·`open`·`high`·`low`·`tvol`·`tamt`. **100행/콜**(BYMD 페이지네이션) — 심층 백필 부적합, 최근 구간 폴백 전용
+- MODP=1은 분할 반영 수정주가 → yfinance(auto_adjust=False, 분할만 소급 반영)와 스케일 정합
+
+### 5.2 해외지수 일봉 — `/uapi/overseas-price/v1/quotations/inquire-daily-chartprice` (FHKST03030100)
+
+- 입력: `FID_COND_MRKT_DIV_CODE="N"`, `FID_INPUT_ISCD`, `FID_INPUT_DATE_1/2`(YYYYMMDD), `FID_PERIOD_DIV_CODE="D"`
+- 코드 실측: `SPX`·`COMP`·`SOX`·`.DJI`(맨 앞 점 필요) OK / **`RUT` 빈 응답(미제공)**
+- `output2[]`: `stck_bsop_date`·`ovrs_nmix_prpr`(종가)·`ovrs_nmix_oprc`·`ovrs_nmix_hgpr`·`ovrs_nmix_lwpr`·`acml_vol`(지수는 대부분 0, .DJI만 채워짐)
+- 함정: **.DJI는 최신일이 하루 늦게 관측됨**(07-18 06:30 KST 시점 타 지수는 07-17행 존재, .DJI는 07-16까지) — 폴백 staleness 판정 시 유의
+
+### 5.3 해외 휴장일 — `/uapi/overseas-stock/v1/quotations/countries-holiday` (CTOS5011R)
+
+- 입력: `TRAD_DT`(YYYYMMDD), `CTX_AREA_FK`/`NK`(연속조회)
+- `output[]`: 국가·시장별 휴장 여부 rows. XNYS 캘린더(exchange_calendars)의 교차검증용 — 정본은 라이브러리 유지
