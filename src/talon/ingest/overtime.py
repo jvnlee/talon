@@ -18,10 +18,11 @@ from talon.data.store import (
 )
 from talon.ingest.close_auction import auction_symbols
 from talon.ingest.kis_sweep import MAX_FAILURE_RATIO
+from talon.ingest.pool import parallel_fetch
 from talon.markets.kr import KrxCalendar
 from talon.models import OvertimeSummary
 from talon.notify.telegram import Alerter
-from talon.sources.kis import KisClient
+from talon.sources.kis import KisClient, build_kis_client
 from talon.sources.kis_market import fetch_overtime_price, fetch_overtime_ranking
 from talon.timeutil import KST, now_utc
 
@@ -64,19 +65,13 @@ def run_overtime(
 
     run_id = state.start_job("overtime")
     summary = OvertimeSummary(status="ok", day=day, symbols=len(symbols))
-    with KisClient(
-        cfg.kis_app_key,
-        cfg.kis_app_secret,
-        base_url=cfg.kis_base_url,
-        token_path=cfg.kis_token_path,
-        rps=cfg.kis_rps,
-        timeout=cfg.request_timeout,
-    ) as client:
-        captured_at = now()
-        price_status, price_rows = _collect_price(client, snapshots, day, symbols, captured_at)
+    with build_kis_client(cfg) as client:
+        price_status, price_rows = _collect_price(
+            client, snapshots, day, symbols, cfg.kis_workers, now
+        )
         summary.parts["overtime_price"] = price_status
         summary.rows["overtime_price"] = price_rows
-        rank_status, rank_rows = _collect_rank(client, snapshots, day, captured_at)
+        rank_status, rank_rows = _collect_rank(client, snapshots, day, now)
         summary.parts["overtime_rank"] = rank_status
         summary.rows["overtime_rank"] = rank_rows
 
@@ -111,25 +106,26 @@ def _collect_price(
     snapshots: DatePartitionedStore,
     day: date,
     symbols: list[str],
-    captured_at: datetime,
+    workers: int,
+    now: Callable[[], datetime],
 ) -> tuple[str, int]:
-    records: list[dict[str, Any]] = []
-    failed = 0
     try:
-        for symbol in symbols:
-            try:
-                row = fetch_overtime_price(client, symbol)
-            except Exception as exc:
-                failed += 1
-                log.warning("overtime price fetch failed for %s: %s", symbol, exc)
-                if failed > len(symbols) * MAX_FAILURE_RATIO:
-                    raise
-                continue
-            if row is not None:
-                records.append({"day": day, "captured_at": captured_at, **row})
+        fetched, failed = parallel_fetch(
+            symbols,
+            lambda symbol: fetch_overtime_price(client, symbol),
+            workers=workers,
+            max_failure_ratio=MAX_FAILURE_RATIO,
+            log_name="overtime price",
+            now=now,
+        )
     except Exception as exc:
         log.exception("overtime price aborted")
         return f"error: {exc}", 0
+    records = [
+        {"day": day, "captured_at": captured_at, **row}
+        for _, row, captured_at in fetched
+        if row is not None
+    ]
     if not records:
         return "empty", 0
     frame = pl.DataFrame(records, schema=OVERTIME_PRICE_SCHEMA)
@@ -142,12 +138,13 @@ def _collect_rank(
     client: KisClient,
     snapshots: DatePartitionedStore,
     day: date,
-    captured_at: datetime,
+    now: Callable[[], datetime],
 ) -> tuple[str, int]:
     rank_records: list[dict[str, Any]] = []
     market_record: dict[str, Any] | None = None
     try:
         for side in OVERTIME_SIDES:
+            captured_at = now()
             result = fetch_overtime_ranking(client, side)
             for row in result["rows"]:
                 rank_records.append({"day": day, "captured_at": captured_at, **row})

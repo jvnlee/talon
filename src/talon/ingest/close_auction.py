@@ -2,7 +2,6 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
-from typing import Any
 
 import polars as pl
 
@@ -16,10 +15,11 @@ from talon.data.store import (
 )
 from talon.ingest.intraday import DECISION_SLOT
 from talon.ingest.kis_sweep import MAX_FAILURE_RATIO, SWEEP_KEY, sweep_symbols
+from talon.ingest.pool import parallel_fetch
 from talon.markets.kr import KrxCalendar
 from talon.models import CloseAuctionSummary
 from talon.notify.telegram import Alerter
-from talon.sources.kis import KisClient
+from talon.sources.kis import KisClient, build_kis_client
 from talon.sources.kis_market import fetch_orderbook
 from talon.timeutil import KST, now_utc
 
@@ -57,14 +57,7 @@ def run_close_auction(
 
     run_id = state.start_job("close-auction")
     summary = CloseAuctionSummary(status="ok", day=day, symbols=len(symbols))
-    with KisClient(
-        cfg.kis_app_key,
-        cfg.kis_app_secret,
-        base_url=cfg.kis_base_url,
-        token_path=cfg.kis_token_path,
-        rps=cfg.kis_rps,
-        timeout=cfg.request_timeout,
-    ) as client:
+    with build_kis_client(cfg) as client:
         for label in PASSES:
             target = _pass_target(day, label)
             current = now().astimezone(KST)
@@ -74,7 +67,9 @@ def run_close_auction(
                 summary.passes[label] = "missed"
                 summary.rows[label] = 0
                 continue
-            status, rows = _collect_pass(client, snapshots, day, label, symbols, now)
+            status, rows = _collect_pass(
+                client, snapshots, day, label, symbols, cfg.kis_workers, now
+            )
             summary.passes[label] = status
             summary.rows[label] = rows
 
@@ -131,26 +126,26 @@ def _collect_pass(
     day: date,
     label: str,
     symbols: list[str],
+    workers: int,
     now: Callable[[], datetime],
 ) -> tuple[str, int]:
-    captured_at = now()
-    records: list[dict[str, Any]] = []
-    failed = 0
     try:
-        for symbol in symbols:
-            try:
-                row = fetch_orderbook(client, symbol)
-            except Exception as exc:
-                failed += 1
-                log.warning("close auction fetch failed for %s: %s", symbol, exc)
-                if failed > len(symbols) * MAX_FAILURE_RATIO:
-                    raise
-                continue
-            if row is not None:
-                records.append({"day": day, "slot": label, "captured_at": captured_at, **row})
+        fetched, failed = parallel_fetch(
+            symbols,
+            lambda symbol: fetch_orderbook(client, symbol),
+            workers=workers,
+            max_failure_ratio=MAX_FAILURE_RATIO,
+            log_name="close auction",
+            now=now,
+        )
     except Exception as exc:
         log.exception("close auction pass %s aborted", label)
         return f"error: {exc}", 0
+    records = [
+        {"day": day, "slot": label, "captured_at": captured_at, **row}
+        for _, row, captured_at in fetched
+        if row is not None
+    ]
     if not records:
         return "empty", 0
     frame = pl.DataFrame(records, schema=ORDERBOOK_INTRADAY_SCHEMA)
