@@ -124,7 +124,11 @@ US_KR_MAP_SEED: tuple[dict[str, object], ...] = (
         "live_at_1510": False,
         "effective_from": date(2023, 1, 1),
         "effective_to": None,
-        "source_note": "한미반도체 TC본더/HBM 정황, 1차 근거 미검증이라 low 유지",
+        "source_note": (
+            "한미반도체 HBM TC본더 점유율 71.2% 1위, SK하이닉스 공급계약 공시 반복"
+            "(2026-01 96.5억·2026-06 HBM4용 442억). 단 장비 수주는 증설의 후행 지표이고"
+            " 2025~ 한화세미텍 이원화로 독점 깨짐 — low 유지"
+        ),
     },
     {
         "us_symbol": "MU",

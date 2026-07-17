@@ -104,8 +104,9 @@ def test_forward_snapshot_flags_hold_window(
 
 
 def test_earnings_snapshot_filters_watchlist(
-    cfg, cal, uscal, state, snapshots, series, alerter
+    monkeypatch, cfg, cal, uscal, state, snapshots, series, alerter
 ):
+    monkeypatch.setattr("talon.ingest.us_calendar.override_rows", list)
     cfg.fred_api_key = "test-key"
 
     summary = run(cfg, cal, uscal, state, snapshots, series, alerter)
@@ -116,6 +117,30 @@ def test_earnings_snapshot_filters_watchlist(
     assert frame["when"].to_list() == ["amc"]
     assert frame["in_hold_window"].to_list() == [False]
     assert frame["source"].to_list() == ["nasdaq"]
+
+
+def test_ir_override_pins_when_and_confirmed(
+    monkeypatch, cfg, cal, uscal, state, snapshots, series, alerter
+):
+    monkeypatch.setattr(
+        "talon.ingest.us_calendar.override_rows",
+        lambda: [
+            {
+                "symbol": "TSLA",
+                "report_day": date(2026, 7, 22),
+                "when": "amc",
+                "confirmed": True,
+            }
+        ],
+    )
+    cfg.fred_api_key = "test-key"
+
+    run(cfg, cal, uscal, state, snapshots, series, alerter)
+
+    frame = snapshots.read_date(US_EARNINGS, TODAY)
+    row = frame.filter(pl.col("symbol") == "TSLA")
+    assert row["source"].to_list() == ["ir"]
+    assert row["confirmed"].to_list() == [True]
 
 
 def test_missing_fred_key_degrades_to_partial(
