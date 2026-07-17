@@ -18,19 +18,9 @@ FREDGRAPH_DATE_COLUMN = "observation_date"
 REALTIME_ALL_START = "1776-07-04"
 REALTIME_ALL_END = "9999-12-31"
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    ),
-}
-
-
 def _get_text(url: str, params: dict[str, str], timeout: float, transport) -> str:
     try:
-        with httpx.Client(
-            timeout=timeout, transport=transport, follow_redirects=True, headers=_HEADERS
-        ) as client:
+        with httpx.Client(timeout=timeout, transport=transport, follow_redirects=True) as client:
             response = client.get(url, params=params)
             response.raise_for_status()
     except httpx.HTTPError as exc:
@@ -129,7 +119,7 @@ def fetch_release_dates(
         "limit": "10000",
     }
     try:
-        with httpx.Client(timeout=timeout, transport=transport, headers=_HEADERS) as client:
+        with httpx.Client(timeout=timeout, transport=transport) as client:
             response = client.get(FRED_RELEASE_DATES_URL, params=params)
             response.raise_for_status()
             payload = response.json()

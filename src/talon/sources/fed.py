@@ -11,13 +11,6 @@ log = logging.getLogger(__name__)
 FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 FOMC_HISTORICAL_URL = "https://www.federalreserve.gov/monetarypolicy/fomchistorical{year}.htm"
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    ),
-}
-
 _YEAR_RE = re.compile(r"(\d{4}) FOMC Meetings")
 _MEETING_RE = re.compile(
     r"fomc-meeting__month[^>]*>\s*<strong>([A-Za-z/]+)</strong>"
@@ -74,9 +67,7 @@ def parse_fomc_historical(html: str) -> set[date]:
 
 def _get(url: str, timeout: float, transport: httpx.BaseTransport | None) -> str:
     try:
-        with httpx.Client(
-            timeout=timeout, transport=transport, follow_redirects=True, headers=_HEADERS
-        ) as client:
+        with httpx.Client(timeout=timeout, transport=transport, follow_redirects=True) as client:
             response = client.get(url)
             response.raise_for_status()
     except httpx.HTTPError as exc:
