@@ -98,6 +98,7 @@ class TalonSettings(BaseSettings):
     krx_api_key: str = ""
     krx_openapi_base_url: str = "https://data-dbg.krx.co.kr/svc/apis"
     krx_openapi_throttle_seconds: float = 0.2
+    krx_flows_pause_seconds: float = 0.5
 
     universe_size: int = 300
     universe_min_trading_value: float = 1_000_000_000.0

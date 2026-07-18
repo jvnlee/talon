@@ -18,6 +18,7 @@ from talon.data.store import (
     investor_records_to_frame,
 )
 from talon.errors import SourceError
+from talon.ingest.flows import daily_flows
 from talon.ingest.universe import candidate_symbols, rebuild_universe
 from talon.markets.kr import KrxCalendar
 from talon.models import EodSummary
@@ -105,6 +106,7 @@ def _run_eod_steps(
 
     _load_indicators(cfg, series, toss, steps)
     _load_investor_trading(cfg, series, toss, steps)
+    _load_investor_flows(cfg, cal, snapshots, steps)
     if source == "pykrx":
         _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
     else:
@@ -278,6 +280,22 @@ def _load_investor_trading(
     steps["investor"] = f"{loaded} rows" + (f", errors: {len(errors)}" if errors else "")
     if errors:
         log.warning("investor trading errors: %s", errors)
+
+
+def _load_investor_flows(
+    cfg: TalonSettings,
+    cal: KrxCalendar,
+    snapshots: DatePartitionedStore,
+    steps: dict[str, str],
+) -> None:
+    if not cfg.krx_login_configured:
+        steps["flows"] = "skipped-no-krx-login"
+        return
+    try:
+        steps["flows"] = daily_flows(cfg, cal=cal, snapshots=snapshots)
+    except Exception as exc:
+        steps["flows"] = f"error: {exc}"
+        log.warning("investor flows errors: %s", exc)
 
 
 def _run_crosscheck(

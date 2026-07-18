@@ -356,3 +356,10 @@ def test_eod_universe_fails_loudly_without_stock_info(
 
 def _no_stock_info(snapshots, day, *, max_stale_days):
     raise SourceError("종목기본정보가 없습니다")
+
+
+def test_eod_skips_investor_flows_without_krx_login(
+    cfg, cal, state, snapshots, series, alerter, sources
+):
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["flows"] == "skipped-no-krx-login"

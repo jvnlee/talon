@@ -54,6 +54,7 @@ from talon.ingest.briefing import run_briefing_snapshot
 from talon.ingest.close_auction import run_close_auction
 from talon.ingest.collect import bootstrap_universe, run_collect
 from talon.ingest.eod import run_eod
+from talon.ingest.flows import backfill_flows, daily_flows
 from talon.ingest.history import backfill_daily
 from talon.ingest.intraday import SLOTS, run_intraday
 from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
@@ -489,6 +490,58 @@ def reconcile(days: int | None, start_text: str | None, end_text: str | None) ->
     click.echo(summary.model_dump_json(exclude={"days"}))
     if summary.status == "error":
         sys.exit(1)
+
+
+@main.group()
+def flows() -> None:
+    """KRX 확정 투자자별 수급 (11분류, 일별)."""
+
+
+@flows.command("backfill")
+@click.option("--start", "start_text", default="2016-07-01", show_default=True, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def flows_backfill(start_text: str, end_text: str | None) -> None:
+    cfg = load_settings()
+    if not cfg.krx_login_configured:
+        raise click.ClickException("TALON_KRX_ID / TALON_KRX_PASSWORD 설정이 필요합니다")
+    with job_lock(cfg.locks_dir / "flows-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("flows backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            start = date.fromisoformat(start_text)
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if end < start:
+                raise click.ClickException("종료일이 시작일보다 빠릅니다")
+
+            def report(index: int, total: int, day: date) -> None:
+                if index % 25 == 0 or index == total:
+                    click.echo(f"{index}/{total} {day}")
+
+            summary = backfill_flows(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                start=start,
+                end=end,
+                progress=report,
+            )
+    click.echo(summary.model_dump_json())
+
+
+@flows.command("daily")
+def flows_daily() -> None:
+    cfg = load_settings()
+    if not cfg.krx_login_configured:
+        raise click.ClickException("TALON_KRX_ID / TALON_KRX_PASSWORD 설정이 필요합니다")
+    with runtime(cfg, toss="skip") as rt:
+        result = daily_flows(cfg, cal=rt.cal, snapshots=rt.snapshots)
+    click.echo(result)
 
 
 @main.group()
