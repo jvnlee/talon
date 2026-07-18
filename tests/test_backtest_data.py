@@ -31,7 +31,7 @@ def snapshot_frame(day, rows):
             "close": [float(r["close"]) for r in rows],
             "volume": [float(r.get("volume", 100)) for r in rows],
             "value": [float(r.get("value", 1_000_000)) for r in rows],
-            "change_pct": [0.0] * len(rows),
+            "change_pct": [float(r.get("change_pct", 0.0)) for r in rows],
         },
         schema=DAILY_SNAPSHOT_SCHEMA,
     )
@@ -311,3 +311,104 @@ def test_market_view_respects_cutoff(snapshots, series, split_data):
 
     tail = MarketView(panel, D1).history("SPLIT", days=1)
     assert tail["day"].to_list() == [D1]
+
+
+def limit_days(snapshots, series):
+    d0, d1, d2 = date(2020, 6, 15), date(2020, 6, 16), date(2020, 6, 17)
+    rows0 = [{"symbol": "LIM", "open": 1000, "close": 1000}]
+    rows1 = [
+        {
+            "symbol": "LIM",
+            "open": 1050,
+            "high": 1300,
+            "low": 1040,
+            "close": 1300,
+            "change_pct": 30.0,
+        }
+    ]
+    rows2 = [
+        {
+            "symbol": "LIM",
+            "open": 1350,
+            "high": 1420,
+            "low": 1290,
+            "close": 1400,
+            "change_pct": 7.69,
+        }
+    ]
+    for day, rows in ((d0, rows0), (d1, rows1), (d2, rows2)):
+        snapshots.write_date(DAILY_CANDLES, day, snapshot_frame(day, rows))
+    series.replace(ADJUST_FACTORS, "LIM", factor_frame([(d0, 1.0), (d1, 1.0), (d2, 1.0)]))
+    write_stock_info(snapshots, [d0, d1, d2], ["LIM"])
+    return d0, d1, d2
+
+
+def test_panel_derives_returns_and_limits(snapshots, series):
+    d0, d1, d2 = limit_days(snapshots, series)
+    panel = load_panel(snapshots, series)
+
+    first = panel.filter(pl.col("day") == d0).row(0, named=True)
+    assert first["overnight_ret"] is None
+    assert first["limit_up_price"] is None
+    assert first["limit_up"] is None
+    assert first["market"] == "KOSPI"
+
+    limit_day = panel.filter(pl.col("day") == d1).row(0, named=True)
+    assert limit_day["limit_up_price"] == 1300.0
+    assert limit_day["limit_down_price"] == 700.0
+    assert limit_day["limit_up"] is True
+    assert limit_day["limit_up_touch"] is True
+    assert limit_day["limit_down"] is False
+    assert limit_day["overnight_ret"] == pytest.approx(0.05)
+    assert limit_day["intraday_ret"] == pytest.approx(1300 / 1050 - 1)
+
+    after = panel.filter(pl.col("day") == d2).row(0, named=True)
+    assert after["limit_up_price"] == 1690.0
+    assert after["limit_up"] is False
+    assert after["limit_up_touch"] is False
+    assert after["overnight_ret"] == pytest.approx(1350 / 1300 - 1)
+
+
+def test_panel_nulls_limits_on_factor_jump(snapshots, series, split_data):
+    panel = load_panel(snapshots, series)
+
+    split_d1 = panel.filter((pl.col("symbol") == "SPLIT") & (pl.col("day") == D1)).row(
+        0, named=True
+    )
+    assert split_d1["limit_up_price"] is None
+    assert split_d1["limit_up"] is None
+    assert split_d1["overnight_ret"] is not None
+
+    flat_d1 = panel.filter((pl.col("symbol") == "FLAT") & (pl.col("day") == D1)).row(0, named=True)
+    assert flat_d1["limit_up_price"] is None
+
+
+def test_panel_nulls_limits_on_reevaluated_base(snapshots, series):
+    d0, d1 = date(2020, 6, 15), date(2020, 6, 16)
+    snapshots.write_date(
+        DAILY_CANDLES, d0, snapshot_frame(d0, [{"symbol": "REV", "open": 400, "close": 426}])
+    )
+    snapshots.write_date(
+        DAILY_CANDLES,
+        d1,
+        snapshot_frame(
+            d1,
+            [
+                {
+                    "symbol": "REV",
+                    "open": 8500,
+                    "high": 8971,
+                    "low": 8200,
+                    "close": 8900,
+                    "change_pct": 4.46,
+                }
+            ],
+        ),
+    )
+    series.replace(ADJUST_FACTORS, "REV", factor_frame([(d0, 1.0), (d1, 1.0)]))
+    write_stock_info(snapshots, [d0, d1], ["REV"])
+
+    panel = load_panel(snapshots, series)
+    row = panel.filter(pl.col("day") == d1).row(0, named=True)
+    assert row["limit_up_price"] is None
+    assert row["limit_up"] is None

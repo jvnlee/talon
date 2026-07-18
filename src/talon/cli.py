@@ -952,6 +952,30 @@ def grid(
         click.echo(str(out_path))
 
 
+@main.command("limits")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def limits_audit(start_text: str | None, end_text: str | None) -> None:
+    """계산한 상하한가를 실제 일봉과 대조한다 — 위반 0건이 규칙 검증."""
+    from talon.backtest.limits import audit_price_limits
+
+    cfg = load_settings()
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    with runtime(cfg, toss="skip") as rt:
+        panel = load_panel(
+            rt.snapshots,
+            rt.series,
+            start=start,
+            end=end,
+            symbols=None,
+            max_info_stale_days=cfg.universe_info_max_stale_days,
+        )
+        delisting = rt.series.read(DELISTING, "registry")
+    report = audit_price_limits(panel, delisting=delisting)
+    click.echo(report.model_dump_json(indent=2))
+
+
 @main.command("gap-stats")
 @click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
 @click.option("--end", "end_text", default=None, help="YYYY-MM-DD (OOS 시작일 이전만 허용)")

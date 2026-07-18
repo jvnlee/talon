@@ -321,3 +321,22 @@ def test_quant_core_accepts_a_close_bet_on_completed_data():
     core = QuantCore(panel, strategies=[spec(("Ref(close, 1) > Ref(close, 2)",))])
 
     assert [s.name for s in core.strategies] == ["probe"]
+
+
+def test_intraday_flags_derived_forming_columns():
+    violations = verify_intraday(
+        [spec(("intraday_ret > 0.05", "limit_up", "Ref(limit_up_touch, 1)"))]
+    )
+
+    assert {(v.part, v.column) for v in violations} == {
+        ("entry[0]", "intraday_ret"),
+        ("entry[1]", "limit_up"),
+    }
+
+
+def test_intraday_allows_overnight_and_limit_price_references():
+    violations = verify_intraday(
+        [spec(("overnight_ret < 0.05", "prev_close >= limit_down_price"))]
+    )
+
+    assert violations == []

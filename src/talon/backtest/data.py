@@ -13,6 +13,7 @@ from talon.data.store import (
     ParquetStore,
 )
 from talon.markets.kr import krx_calendar
+from talon.markets.kr_limits import price_limit_exprs
 from talon.quant.universe import TRADABLE_STOCK, tradable_stock
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,21 @@ _SESSION_OPEN = time(9, 0)
 _COVERAGE_LIMIT = time(9, 1)
 
 INTRADAY_STATE_COLUMNS = ("close_1510", "high_1510", "low_1510", "volume_1510")
+
+DERIVED_COLUMNS = (
+    "market",
+    "raw_high",
+    "raw_low",
+    "raw_prev_close",
+    "overnight_ret",
+    "intraday_ret",
+    "limit_up_price",
+    "limit_down_price",
+    "limit_up",
+    "limit_down",
+    "limit_up_touch",
+    "limit_down_touch",
+)
 
 PANEL_COLUMNS = (
     "day",
@@ -39,6 +55,7 @@ PANEL_COLUMNS = (
     "intraday_exact",
     "option_expiry",
     TRADABLE_STOCK,
+    *DERIVED_COLUMNS,
 )
 
 
@@ -63,7 +80,9 @@ def load_panel(
 
     if symbols is not None:
         daily_scan = daily_scan.filter(pl.col("symbol").is_in(symbols))
-    daily = daily_scan.select("day", "symbol", "open", "high", "low", "close", "volume", "value")
+    daily = daily_scan.select(
+        "day", "symbol", "open", "high", "low", "close", "volume", "value", "change_pct"
+    )
 
     factors = (
         pl.scan_parquet(factors_dir / "*.parquet", include_file_paths="path")
@@ -74,7 +93,10 @@ def load_panel(
         factors = factors.filter(pl.col("symbol").is_in(symbols))
 
     info = info_scan.select(
-        pl.col("day").alias("info_day"), "symbol", tradable_stock().alias(TRADABLE_STOCK)
+        pl.col("day").alias("info_day"),
+        "symbol",
+        "market",
+        tradable_stock().alias(TRADABLE_STOCK),
     )
 
     joined = daily.join(factors, on=["symbol", "day"], how="inner").collect()
@@ -86,13 +108,27 @@ def load_panel(
         joined.sort("symbol", "day")
         .with_columns(
             pl.col("close").alias("raw_close"),
+            pl.col("high").alias("raw_high"),
+            pl.col("low").alias("raw_low"),
             (pl.col("open") * pl.col("factor")).alias("open"),
             (pl.col("high") * pl.col("factor")).alias("high"),
             (pl.col("low") * pl.col("factor")).alias("low"),
             (pl.col("close") * pl.col("factor")).alias("close"),
             (pl.col("volume") / pl.col("factor")).alias("volume"),
         )
-        .with_columns(pl.col("close").shift(1).over("symbol").alias("prev_close"))
+        .with_columns(
+            pl.col("close").shift(1).over("symbol").alias("prev_close"),
+            pl.col("raw_close").shift(1).over("symbol").alias("raw_prev_close"),
+            pl.col("factor").shift(1).over("symbol").alias("_prev_factor"),
+        )
+        .with_columns(
+            pl.when(pl.col("prev_close") > 0)
+            .then(pl.col("open") / pl.col("prev_close") - 1)
+            .alias("overnight_ret"),
+            pl.when(pl.col("open") > 0)
+            .then(pl.col("close") / pl.col("open") - 1)
+            .alias("intraday_ret"),
+        )
     )
     if start is not None:
         panel = panel.filter(pl.col("day") >= start)
@@ -108,7 +144,31 @@ def load_panel(
         .join(info.collect(), on=["info_day", "symbol"], how="left")
         .with_columns(pl.col(TRADABLE_STOCK).fill_null(False))
     )
+    panel = _with_price_limits(panel)
     return panel.select(PANEL_COLUMNS).sort("day", "symbol")
+
+
+def _with_price_limits(panel: pl.DataFrame) -> pl.DataFrame:
+    upper, lower = price_limit_exprs(pl.col("raw_prev_close"), pl.col("market"), pl.col("day"))
+    implied_base = pl.col("raw_close") / (1 + pl.col("change_pct") / 100)
+    base_intact = (
+        (implied_base - pl.col("raw_prev_close")).abs() / pl.col("raw_prev_close") <= 0.005
+    ).fill_null(True)
+    known = (
+        pl.col("raw_prev_close").is_not_null()
+        & pl.col("market").is_not_null()
+        & (pl.col("factor") == pl.col("_prev_factor"))
+        & base_intact
+    )
+    return panel.with_columns(
+        pl.when(known).then(upper).alias("limit_up_price"),
+        pl.when(known).then(lower).alias("limit_down_price"),
+    ).with_columns(
+        (pl.col("raw_close") == pl.col("limit_up_price")).alias("limit_up"),
+        (pl.col("raw_close") == pl.col("limit_down_price")).alias("limit_down"),
+        (pl.col("raw_high") >= pl.col("limit_up_price")).alias("limit_up_touch"),
+        (pl.col("raw_low") <= pl.col("limit_down_price")).alias("limit_down_touch"),
+    )
 
 
 def _minute_1510_states(

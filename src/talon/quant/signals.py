@@ -8,7 +8,23 @@ from talon.factors.engine import column_min_lags
 EXECUTION_MODES = ("open", "close_overnight")
 
 INTRADAY_EXECUTIONS = frozenset({"close_overnight"})
-FORMING_COLUMNS = frozenset({"close", "high", "low", "volume", "value", "raw_close"})
+FORMING_COLUMNS = frozenset(
+    {
+        "close",
+        "high",
+        "low",
+        "volume",
+        "value",
+        "raw_close",
+        "raw_high",
+        "raw_low",
+        "intraday_ret",
+        "limit_up",
+        "limit_down",
+        "limit_up_touch",
+        "limit_down_touch",
+    }
+)
 
 
 @dataclass(frozen=True)
