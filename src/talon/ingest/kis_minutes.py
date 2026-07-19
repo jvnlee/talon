@@ -40,6 +40,11 @@ MAX_CONSECUTIVE_FAILURES = 3
 MAX_FAILURE_RATIO = 0.1
 PROBE_SYMBOL = "005930"
 PROBE_WINDOW_DAYS = 420
+LATE_ANCHOR = "173000"
+SESSION_SHIFTS: dict[date, timedelta] = {
+    date(2025, 11, 13): timedelta(hours=1),
+    date(2026, 11, 19): timedelta(hours=1),
+}
 
 
 def _bind_fetch(client: KisClient) -> KisMinutesFetcher:
@@ -49,8 +54,8 @@ def _bind_fetch(client: KisClient) -> KisMinutesFetcher:
     return fetch
 
 
-def _anchor_for(cal: KrxCalendar, day: date) -> str:
-    return cal.session_close(day).astimezone(KST).strftime("%H%M%S")
+def _session_close(cal: KrxCalendar, day: date) -> datetime:
+    return cal.session_close(day) + SESSION_SHIFTS.get(day, timedelta(0))
 
 
 def _day_symbols(snapshots: DatePartitionedStore, day: date) -> list[str]:
@@ -114,7 +119,7 @@ def _collect_day(
     fetch: KisMinutesFetcher,
     workers: int,
 ) -> pl.DataFrame:
-    anchor = _anchor_for(cal, day)
+    anchor = LATE_ANCHOR
 
     def one(symbol: str) -> list[dict[str, Any]]:
         return fetch(symbol, day, anchor)
@@ -298,7 +303,7 @@ def _run_probe(
     now: datetime,
 ) -> KisMinutesProbeReport:
     if day is not None:
-        used_anchor = anchor or _anchor_for(cal, day)
+        used_anchor = anchor or LATE_ANCHOR
         bars = fetch(PROBE_SYMBOL, day, used_anchor)
         times = sorted(bar["time"] for bar in bars)
         return KisMinutesProbeReport(
@@ -327,7 +332,7 @@ def _probe_cliff(
     def has_data(session: date) -> bool:
         nonlocal calls
         calls += 1
-        return len(fetch(PROBE_SYMBOL, session, _anchor_for(cal, session))) > 0
+        return len(fetch(PROBE_SYMBOL, session, LATE_ANCHOR)) > 0
 
     if not has_data(sessions[-1]):
         return KisMinutesProbeReport(status="no-data", calls=calls)
@@ -401,7 +406,7 @@ def _out_of_session(cal: KrxCalendar, frame: pl.DataFrame) -> int:
         {
             "day": days,
             "session_open": [cal.session_open(day) for day in days],
-            "session_close": [cal.session_close(day) for day in days],
+            "session_close": [_session_close(cal, day) for day in days],
         },
         schema={
             "day": pl.Date(),
@@ -450,7 +455,7 @@ def _crosscheck(
     expected_close = pl.DataFrame(
         {
             "day": days,
-            "expected_close_ts": [to_utc(cal.session_close(day)) for day in days],
+            "expected_close_ts": [to_utc(_session_close(cal, day)) for day in days],
         },
         schema={"day": pl.Date(), "expected_close_ts": pl.Datetime("us", "UTC")},
     )

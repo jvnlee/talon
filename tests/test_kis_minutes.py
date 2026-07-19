@@ -601,6 +601,32 @@ def test_verify_ok_on_clean_data(cfg, cal, snapshots):
     assert report.crosscheck_mismatches == 0
 
 
+def test_verify_csat_shift_admits_late_close_bar(cfg, cal, snapshots):
+    day = date(2025, 11, 13)
+    frame = _minutes_frame(day, "005930", [("163000", 100.0), ("171000", 100.0)])
+    snapshots.write_date(KIS_MINUTES, day, frame)
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots)
+    assert report.out_of_session == 1
+
+
+def test_verify_crosscheck_csat_shift_uses_late_close_bar(cfg, cal, snapshots):
+    day = date(2025, 11, 13)
+    matching = _minutes_frame(day, "005930", [("100000", 70500.0), ("163000", 70500.0)])
+    diverging = _minutes_frame(day, "000660", [("100000", 70000.0), ("163000", 70000.0)])
+    snapshots.write_date(KIS_MINUTES, day, pl.concat([matching, diverging]))
+    snapshots.write_date(
+        DAILY_CANDLES,
+        day,
+        pl.concat([_daily_frame(day, "005930", 70500.0), _daily_frame(day, "000660", 70500.0)]),
+    )
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots)
+    assert report.crosscheck_symbols == 2
+    assert report.crosscheck_mismatches == 1
+    assert any("000660" in example for example in report.examples)
+
+
 def _daily_frame(day, symbol, close):
     return pl.DataFrame(
         {
