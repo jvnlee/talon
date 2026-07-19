@@ -329,6 +329,33 @@
 
 ---
 
+### 1.12 주식일별분봉조회 — `inquire-time-dailychartprice`
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 경로 | `/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice` | 【문서】 |
+| TR / method | `FHKST03010230` / GET | 【문서】 |
+| 파라미터 | `FID_COND_MRKT_DIV_CODE`(J 고정) · `FID_INPUT_ISCD`(종목 6자리) · `FID_INPUT_DATE_1`(YYYYMMDD, 과거일) · **`FID_INPUT_HOUR_1`(HHMMSS 앵커 — 이 시각 이하의 분봉을 최신순 최대 120건, row0=앵커 분 포함)** · `FID_PW_DATA_INCU_YN`("N") · `FID_FAKE_TICK_INCU_YN`("" = 무거래 분 생략) | 【문서】 |
+| 응답 구조 | `output1`=일 메타(단일 dict, 저장 안 함) + `output2`=분봉 리스트(최신순, 최대 120행) | 【문서】 |
+| 갱신 주기 | 과거 확정 분봉(정정 없음). 15:30 종가 동시호가 체결은 `153000` 봉으로 포함, 무거래 분은 행 자체가 없음 | 【문서】 |
+| 페이지네이션 | tr_cont 미사용. 같은 날짜 더 과거 = `FID_INPUT_HOUR_1`을 (직전 응답 최소 `stck_cntg_hour` − 1분)으로 재호출. 종료: 새 행 없음 / 최소 시각 안 줄어듦 / max_pages 도달 | 【문서】 |
+| 보존 | 공식 약 1년(영업일 기준). 착수가 늦을수록 소급 가능 구간이 매일 소멸 | 【문서】 |
+
+**핵심 응답 필드 / 단위** (`output2`, 시각 오름차순으로 변환 저장, `stck_bsop_date` 요청일 불일치 행 폐기)
+
+| 필드 | 의미 | 단위 | 근거 |
+|---|---|---|---|
+| `stck_bsop_date` | 봉 일자(요청일 에코 — 방어적 검증) | YYYYMMDD | 【문서】 |
+| `stck_cntg_hour` → `time`(→ `ts`) | 봉 시각(KST 벽시계 → UTC 합성) | HHMMSS | 【문서】 |
+| `stck_oprc`/`stck_hgpr`/`stck_lwpr`/`stck_prpr` → `open`/`high`/`low`/`close` | 분봉 OHLC | 원 | 【문서】 |
+| `cntg_vol` → `volume` | 그 분 체결량(분당) | 주 | 【문서】 |
+| `acml_tr_pbmn` → `cum_value` | 그 봉까지의 누적 거래대금(누적 원본 그대로 저장) | 원 | 【문서】 |
+
+> B-10 백필 원천. 저장은 `kis_minutes_1m`(일 파티션, 키 `(symbol, ts)`), `talon kis-minutes {backfill,daily,probe,verify}` + eod 전방 스텝. J 고정(NX/UN는 1.1·1.9류와 동일하게 시장구분 오염 우려 — 미검증이나 KRX단독 J 사용). rt_cd≠0은 SourceError(재시도), rt_cd=0+빈 output2는 정상 무데이터.
+> **【미검증】** (Q5) 늦은 앵커(예: 장중·155000 등 세션 종료 이후 시각) 동작 — probe 단일조회 모드(`--day`/`--anchor`)로 실측 예정. **【미검증】** `FID_FAKE_TICK_INCU_YN="Y"`(허봉 포함)의 정확한 의미·행 생성 규칙(현재 기본 "" 무거래분 생략만 사용).
+
+---
+
 ## 2. 수집기 설계 지침
 
 ### 2.1 토큰 캐시 규칙
