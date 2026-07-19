@@ -74,9 +74,7 @@ def test_overtime_ok_exits_zero(tmp_path, monkeypatch, cfg):
     monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
     monkeypatch.setattr(
         "talon.cli.run_overtime",
-        lambda *args, **kwargs: OvertimeSummary(
-            status="ok", day=date(2026, 7, 15), symbols=3
-        ),
+        lambda *args, **kwargs: OvertimeSummary(status="ok", day=date(2026, 7, 15), symbols=3),
     )
 
     runner = CliRunner()
@@ -375,9 +373,7 @@ def test_grid_refuses_to_touch_the_oos_zone(tmp_path, monkeypatch, cfg):
     monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
 
     runner = CliRunner()
-    result = runner.invoke(
-        main, ["grid", "--end", "2026-03-01", "--oos-start", "2026-02-01"]
-    )
+    result = runner.invoke(main, ["grid", "--end", "2026-03-01", "--oos-start", "2026-02-01"])
 
     assert result.exit_code == 1
     assert "IS 전용" in result.output
@@ -524,6 +520,136 @@ def test_sensitivity_rejects_unknown_strategy(tmp_path, monkeypatch, cfg):
 
     assert result.exit_code == 1
     assert "알 수 없는 전략" in result.output
+
+
+def test_kis_minutes_group_is_registered():
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "kis-minutes" in result.output
+
+
+def test_kis_minutes_backfill_requires_kis(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["kis-minutes", "backfill"])
+    assert result.exit_code != 0
+    assert "TALON_KIS_APP_KEY" in result.output
+
+
+def test_kis_minutes_backfill_smoke(tmp_path, monkeypatch, cfg):
+    import json
+
+    from talon.models import KisMinutesBackfillSummary
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_KIS_APP_KEY", "k")
+    monkeypatch.setenv("TALON_KIS_APP_SECRET", "s")
+    monkeypatch.setattr(
+        "talon.cli.backfill_kis_minutes",
+        lambda *a, **k: KisMinutesBackfillSummary(status="ok", sessions=3, loaded=3, rows=9),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["kis-minutes", "backfill", "--end", "2026-07-16"])
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output.splitlines()[-1])
+    assert summary["status"] == "ok"
+    assert summary["rows"] == 9
+
+
+def test_kis_minutes_daily_smoke(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_KIS_APP_KEY", "k")
+    monkeypatch.setenv("TALON_KIS_APP_SECRET", "s")
+    monkeypatch.setattr("talon.cli.daily_kis_minutes", lambda *a, **k: "up-to-date")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["kis-minutes", "daily"])
+    assert result.exit_code == 0, result.output
+    assert "up-to-date" in result.output
+
+
+def test_kis_minutes_probe_smoke(tmp_path, monkeypatch, cfg):
+    import json
+    from datetime import date
+
+    from talon.models import KisMinutesProbeReport
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_KIS_APP_KEY", "k")
+    monkeypatch.setenv("TALON_KIS_APP_SECRET", "s")
+    monkeypatch.setattr(
+        "talon.cli.probe_kis_minutes",
+        lambda *a, **k: KisMinutesProbeReport(status="ok", cliff=date(2026, 7, 13), calls=4),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["kis-minutes", "probe"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["cliff"] == "2026-07-13"
+
+
+def test_kis_minutes_verify_smoke(tmp_path, monkeypatch, cfg):
+    import json
+
+    from talon.models import KisMinutesVerifyReport
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setattr(
+        "talon.cli.verify_kis_minutes",
+        lambda *a, **k: KisMinutesVerifyReport(status="ok", days=2, rows=10),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["kis-minutes", "verify"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["rows"] == 10
+
+
+def test_kis_minutes_backfill_rejects_start_after_end(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_KIS_APP_KEY", "k")
+    monkeypatch.setenv("TALON_KIS_APP_SECRET", "s")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["kis-minutes", "backfill", "--start", "2026-07-16", "--end", "2026-07-10"]
+    )
+    assert result.exit_code != 0
+    assert "종료일이 시작일보다 빠릅니다" in result.output
+
+
+def test_kis_minutes_backfill_rps_overrides_cfg(tmp_path, monkeypatch, cfg):
+    from talon.models import KisMinutesBackfillSummary
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_KIS_APP_KEY", "k")
+    monkeypatch.setenv("TALON_KIS_APP_SECRET", "s")
+    captured: dict = {}
+
+    def fake_backfill(captured_cfg, **kwargs):
+        captured["cfg"] = captured_cfg
+        return KisMinutesBackfillSummary(status="ok", sessions=1, loaded=1, rows=1)
+
+    monkeypatch.setattr("talon.cli.backfill_kis_minutes", fake_backfill)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["kis-minutes", "backfill", "--end", "2026-07-16", "--rps", "12"])
+    assert result.exit_code == 0, result.output
+    assert captured["cfg"].kis_rps == 12
 
 
 def test_lookahead_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):

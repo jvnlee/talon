@@ -57,6 +57,12 @@ from talon.ingest.eod import run_eod
 from talon.ingest.flows import backfill_flows, daily_flows
 from talon.ingest.history import backfill_daily
 from talon.ingest.intraday import SLOTS, run_intraday
+from talon.ingest.kis_minutes import (
+    backfill_kis_minutes,
+    daily_kis_minutes,
+    probe_kis_minutes,
+    verify_kis_minutes,
+)
 from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
 from talon.ingest.overtime import run_overtime
 from talon.ingest.us_calendar import run_us_calendar
@@ -339,11 +345,7 @@ def us_map() -> None:
         latest_info = rt.snapshots.latest(STOCK_INFO)
         if latest_info is not None:
             known = set(latest_info[1]["symbol"].to_list())
-        mapped = {
-            symbol
-            for symbols in frame["kr_symbols"].to_list()
-            for symbol in symbols
-        }
+        mapped = {symbol for symbols in frame["kr_symbols"].to_list() for symbol in symbols}
         unknown = sorted(mapped - known) if known else []
         rt.series.replace(US_KR_MAP, US_KR_MAP_NAME, frame)
         summary = UsMapSummary(status="ok", rows=frame.height, unknown=unknown)
@@ -542,6 +544,102 @@ def flows_daily() -> None:
     with runtime(cfg, toss="skip") as rt:
         result = daily_flows(cfg, cal=rt.cal, snapshots=rt.snapshots)
     click.echo(result)
+
+
+@main.group("kis-minutes")
+def kis_minutes() -> None:
+    """KIS 확정 분봉 (KRX단독 1분봉, 일 파티션)."""
+
+
+@kis_minutes.command("backfill")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--rps", type=float, default=None, help="KIS 초당 호출 수 상한")
+@click.option("--force", is_flag=True)
+def kis_minutes_backfill(
+    start_text: str | None, end_text: str | None, rps: float | None, force: bool
+) -> None:
+    cfg = load_settings()
+    if not cfg.kis_configured:
+        raise click.ClickException("TALON_KIS_APP_KEY / TALON_KIS_APP_SECRET 설정이 필요합니다")
+    if rps is not None:
+        cfg = cfg.model_copy(update={"kis_rps": rps})
+    with job_lock(cfg.locks_dir / "kis-minutes-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("kis-minutes backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            start = date.fromisoformat(start_text) if start_text else None
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if start is not None and end < start:
+                raise click.ClickException("종료일이 시작일보다 빠릅니다")
+
+            def report(index: int, total: int, day: date) -> None:
+                if index % 5 == 0 or index == total:
+                    click.echo(f"{index}/{total} {day}")
+
+            summary = backfill_kis_minutes(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                start=start,
+                end=end,
+                progress=report,
+                force=force,
+            )
+    click.echo(summary.model_dump_json())
+
+
+@kis_minutes.command("daily")
+def kis_minutes_daily() -> None:
+    cfg = load_settings()
+    if not cfg.kis_configured:
+        raise click.ClickException("TALON_KIS_APP_KEY / TALON_KIS_APP_SECRET 설정이 필요합니다")
+    with job_lock(cfg.locks_dir / "kis-minutes-daily.lock") as acquired:
+        if not acquired:
+            click.echo("kis-minutes daily가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            result = daily_kis_minutes(cfg, cal=rt.cal, snapshots=rt.snapshots)
+    click.echo(result)
+
+
+@kis_minutes.command("probe")
+@click.option("--day", "day_text", default=None, help="YYYY-MM-DD")
+@click.option("--anchor", default=None, help="HHMMSS")
+def kis_minutes_probe(day_text: str | None, anchor: str | None) -> None:
+    cfg = load_settings()
+    if not cfg.kis_configured:
+        raise click.ClickException("TALON_KIS_APP_KEY / TALON_KIS_APP_SECRET 설정이 필요합니다")
+    with runtime(cfg, toss="skip") as rt:
+        day = date.fromisoformat(day_text) if day_text else None
+        report = probe_kis_minutes(cfg, cal=rt.cal, day=day, anchor=anchor)
+    click.echo(report.model_dump_json(indent=2))
+
+
+@kis_minutes.command("verify")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--symbols-sample", type=int, default=30, show_default=True)
+def kis_minutes_verify(start_text: str | None, end_text: str | None, symbols_sample: int) -> None:
+    cfg = load_settings()
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    with runtime(cfg, toss="skip") as rt:
+        report = verify_kis_minutes(
+            cfg,
+            cal=rt.cal,
+            snapshots=rt.snapshots,
+            start=start,
+            end=end,
+            symbols_sample=symbols_sample,
+        )
+    click.echo(report.model_dump_json(indent=2))
 
 
 @main.group()
@@ -878,9 +976,7 @@ def grid(
         raise click.ClickException(str(exc)) from exc
 
     regime_filter = FullExposureRegime()
-    warmup = max(
-        _columns_warmup([factory(**params)], regime_filter) for params in grid_params
-    )
+    warmup = max(_columns_warmup([factory(**params)], regime_filter) for params in grid_params)
     load_start = _warmup_start(start, warmup)
     with runtime(cfg, toss="skip") as rt:
         panel = load_panel(
@@ -1017,9 +1113,7 @@ def gap_stats(start_text: str | None, end_text: str | None, oos_start_text: str)
             if stats.strength_floor_pct is None
             else f"당일 +{stats.strength_floor_pct:g}% 이상"
         )
-        quantiles = " ".join(
-            f"{name}={value:+.2f}%" for name, value in stats.quantiles_pct.items()
-        )
+        quantiles = " ".join(f"{name}={value:+.2f}%" for name, value in stats.quantiles_pct.items())
         click.echo(f"{label} (표본 {stats.count:,}건): 평균 {stats.mean_pct:+.2f}% {quantiles}")
     click.echo(json.dumps([stats.model_dump() for stats in results], ensure_ascii=False))
 

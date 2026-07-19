@@ -363,3 +363,30 @@ def test_eod_skips_investor_flows_without_krx_login(
 ):
     summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
     assert summary.steps["flows"] == "skipped-no-krx-login"
+
+
+def test_eod_skips_kis_minutes_without_kis(cfg, cal, state, snapshots, series, alerter, sources):
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["kis_minutes"] == "skipped-no-kis"
+
+
+def test_eod_records_kis_minutes_step(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    monkeypatch.setattr("talon.ingest.eod.daily_kis_minutes", lambda *a, **k: "2/2 days, 500 rows")
+    cfg = cfg.model_copy(update={"kis_app_key": "k", "kis_app_secret": "s"})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["kis_minutes"] == "2/2 days, 500 rows"
+
+
+def test_eod_kis_minutes_error_is_captured(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    def boom(*a, **k):
+        raise SourceError("분봉 실패")
+
+    monkeypatch.setattr("talon.ingest.eod.daily_kis_minutes", boom)
+    cfg = cfg.model_copy(update={"kis_app_key": "k", "kis_app_secret": "s"})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.status == "ok"
+    assert summary.steps["kis_minutes"] == "error: 분봉 실패"

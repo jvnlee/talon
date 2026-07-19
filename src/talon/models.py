@@ -190,6 +190,38 @@ class BackfillSummary(BaseModel):
     failed: list[str] = []
 
 
+class KisMinutesBackfillSummary(BaseModel):
+    status: str
+    sessions: int = 0
+    loaded: int = 0
+    skipped: int = 0
+    rows: int = 0
+    failed: list[str] = []
+
+
+class KisMinutesProbeReport(BaseModel):
+    status: str
+    cliff: date | None = None
+    calls: int = 0
+    day: date | None = None
+    anchor: str | None = None
+    rows: int = 0
+    first_ts: datetime | None = None
+    last_ts: datetime | None = None
+
+
+class KisMinutesVerifyReport(BaseModel):
+    status: str
+    days: int = 0
+    rows: int = 0
+    duplicate_keys: int = 0
+    ohlc_violations: int = 0
+    out_of_session: int = 0
+    crosscheck_symbols: int = 0
+    crosscheck_mismatches: int = 0
+    examples: list[str] = []
+
+
 class ReconcileDay(BaseModel):
     day: date
     status: str

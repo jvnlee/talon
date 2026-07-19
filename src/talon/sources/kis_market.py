@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from talon.sources.kis import KisClient
@@ -33,6 +33,8 @@ OVERSEAS_DAILY_PATH = "/uapi/overseas-price/v1/quotations/dailyprice"
 OVERSEAS_DAILY_TR = "HHDFS76240000"
 OVERSEAS_INDEX_PATH = "/uapi/overseas-price/v1/quotations/inquire-daily-chartprice"
 OVERSEAS_INDEX_TR = "FHKST03030100"
+MINUTE_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
+MINUTE_CHART_TR = "FHKST03010230"
 
 RANKING_SIDES = {"buy": "0", "sell": "1"}
 OVERTIME_RANKING_SIDES = {"up": "2", "down": "5"}
@@ -102,6 +104,7 @@ def fetch_investor_estimate(client: KisClient, symbol: str) -> dict[str, Any] | 
     buckets = payload.get("output2")
     if not isinstance(buckets, list) or not buckets:
         return None
+
     def bucket_index(row: dict[str, Any]) -> int:
         value = _num(row.get("bsop_hour_gb"))
         return int(value) if value is not None else -1
@@ -523,3 +526,66 @@ def fetch_overseas_index_daily(
             }
         )
     return sorted(records, key=lambda record: record["day"])
+
+
+def _decrement_minute(time_text: str) -> str:
+    moment = datetime(2000, 1, 1, int(time_text[:2]), int(time_text[2:4]), int(time_text[4:6]))
+    return (moment - timedelta(minutes=1)).strftime("%H%M%S")
+
+
+def fetch_minute_chart(
+    client: KisClient, symbol: str, day: date, *, anchor: str, max_pages: int = 1
+) -> list[dict[str, Any]]:
+    request_date = day.strftime("%Y%m%d")
+    rows: dict[str, dict[str, Any]] = {}
+    cursor = anchor
+    seen_oldest: str | None = None
+    for _ in range(max(1, max_pages)):
+        payload = client.get(
+            MINUTE_CHART_PATH,
+            MINUTE_CHART_TR,
+            {
+                "FID_COND_MRKT_DIV_CODE": KRX_ONLY,
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_DATE_1": request_date,
+                "FID_INPUT_HOUR_1": cursor,
+                "FID_PW_DATA_INCU_YN": "N",
+                "FID_FAKE_TICK_INCU_YN": "",
+            },
+        )
+        bars = payload.get("output2")
+        if not isinstance(bars, list) or not bars:
+            break
+        page_times: list[str] = []
+        added = 0
+        for bar in bars:
+            if not isinstance(bar, dict):
+                continue
+            if _parse_yyyymmdd(bar.get("stck_bsop_date")) != day:
+                continue
+            time_text = _text(bar.get("stck_cntg_hour"))
+            if time_text is None or len(time_text) != 6 or not time_text.isdigit():
+                continue
+            page_times.append(time_text)
+            if time_text in rows:
+                continue
+            rows[time_text] = {
+                "time": time_text,
+                "open": _num(bar.get("stck_oprc")),
+                "high": _num(bar.get("stck_hgpr")),
+                "low": _num(bar.get("stck_lwpr")),
+                "close": _num(bar.get("stck_prpr")),
+                "volume": _num(bar.get("cntg_vol")),
+                "cum_value": _num(bar.get("acml_tr_pbmn")),
+            }
+            added += 1
+        if not page_times:
+            break
+        oldest = min(page_times)
+        if seen_oldest is not None and oldest >= seen_oldest:
+            break
+        seen_oldest = oldest
+        if added == 0:
+            break
+        cursor = _decrement_minute(oldest)
+    return [rows[key] for key in sorted(rows)]

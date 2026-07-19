@@ -19,6 +19,7 @@ from talon.data.store import (
 )
 from talon.errors import SourceError
 from talon.ingest.flows import daily_flows
+from talon.ingest.kis_minutes import daily_kis_minutes
 from talon.ingest.universe import candidate_symbols, rebuild_universe
 from talon.markets.kr import KrxCalendar
 from talon.models import EodSummary
@@ -107,6 +108,7 @@ def _run_eod_steps(
     _load_indicators(cfg, series, toss, steps)
     _load_investor_trading(cfg, series, toss, steps)
     _load_investor_flows(cfg, cal, snapshots, steps)
+    _load_kis_minutes(cfg, cal, snapshots, steps)
     if source == "pykrx":
         _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
     else:
@@ -296,6 +298,22 @@ def _load_investor_flows(
     except Exception as exc:
         steps["flows"] = f"error: {exc}"
         log.warning("investor flows errors: %s", exc)
+
+
+def _load_kis_minutes(
+    cfg: TalonSettings,
+    cal: KrxCalendar,
+    snapshots: DatePartitionedStore,
+    steps: dict[str, str],
+) -> None:
+    if not cfg.kis_configured:
+        steps["kis_minutes"] = "skipped-no-kis"
+        return
+    try:
+        steps["kis_minutes"] = daily_kis_minutes(cfg, cal=cal, snapshots=snapshots)
+    except Exception as exc:
+        steps["kis_minutes"] = f"error: {exc}"
+        log.warning("kis minutes errors: %s", exc)
 
 
 def _run_crosscheck(
