@@ -10,13 +10,11 @@ import polars as pl
 from talon.config import TalonSettings
 from talon.data.state import StateDB
 from talon.data.store import (
-    ADJUST_FACTORS,
     DAILY_CANDLES,
     KIS_MINUTES,
     KIS_MINUTES_SCHEMA,
     STOCK_INFO,
     DatePartitionedStore,
-    ParquetStore,
 )
 from talon.errors import SourceError
 from talon.ingest.pool import parallel_fetch
@@ -44,6 +42,8 @@ PROBE_SYMBOL = "005930"
 PROBE_WINDOW_DAYS = 420
 LATE_ANCHOR = "173000"
 CLOSE_VI_EXTENSION = timedelta(minutes=2)
+RATIO_TOLERANCE = 0.001
+MAX_RATIO_SEGMENTS = 4
 SESSION_SHIFTS: dict[date, timedelta] = {
     date(2025, 11, 13): timedelta(hours=1),
     date(2026, 11, 19): timedelta(hours=1),
@@ -360,7 +360,6 @@ def verify_kis_minutes(
     *,
     cal: KrxCalendar,
     snapshots: DatePartitionedStore,
-    series: ParquetStore | None = None,
     start: date | None = None,
     end: date | None = None,
     symbols_sample: int = 30,
@@ -387,8 +386,8 @@ def verify_kis_minutes(
         (pl.col("open") < pl.col("low")) | (pl.col("open") > pl.col("high"))
     ).height
     out_of_session = _out_of_session(cal, frame)
-    crosscheck_symbols, crosscheck_mismatches, examples = _crosscheck(
-        cal, snapshots, series, frame, symbols_sample
+    crosscheck_symbols, crosscheck_mismatches, restated_symbols, examples = _crosscheck(
+        cal, snapshots, frame, symbols_sample
     )
     status = (
         "ok"
@@ -408,6 +407,7 @@ def verify_kis_minutes(
         out_of_session=out_of_session,
         crosscheck_symbols=crosscheck_symbols,
         crosscheck_mismatches=crosscheck_mismatches,
+        restated_symbols=restated_symbols,
         examples=examples,
     )
 
@@ -435,17 +435,16 @@ def _out_of_session(cal: KrxCalendar, frame: pl.DataFrame) -> int:
 def _crosscheck(
     cal: KrxCalendar,
     snapshots: DatePartitionedStore,
-    series: ParquetStore | None,
     frame: pl.DataFrame,
     symbols_sample: int,
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, int, list[str]]:
     symbols = frame.select("symbol").unique().to_series().to_list()
     if not symbols:
-        return 0, 0, []
+        return 0, 0, 0, []
     sampled = random.Random(0).sample(sorted(symbols), min(symbols_sample, len(symbols)))
     daily_scan = snapshots.scan(DAILY_CANDLES)
     if daily_scan is None:
-        return 0, 0, []
+        return 0, 0, 0, []
     last_bars = (
         frame.filter(pl.col("symbol").is_in(sampled))
         .sort("ts")
@@ -462,7 +461,7 @@ def _crosscheck(
     )
     merged = last_bars.join(daily, on=["symbol", "day"], how="inner")
     if merged.is_empty():
-        return 0, 0, []
+        return 0, 0, 0, []
     crosscheck_symbols = merged.select("symbol").n_unique()
     days = merged.select("day").unique().to_series().to_list()
     expected_close = pl.DataFrame(
@@ -472,44 +471,53 @@ def _crosscheck(
         },
         schema={"day": pl.Date(), "expected_close_ts": pl.Datetime("us", "UTC")},
     )
-    auction = merged.join(expected_close, on="day", how="left").filter(
-        (pl.col("last_ts") == pl.col("expected_close_ts"))
-        | (pl.col("last_ts") == pl.col("expected_close_ts") + CLOSE_VI_EXTENSION)
-    )
-    if auction.is_empty():
-        return crosscheck_symbols, 0, []
-    factors = _restatement_factors(series, sampled)
-    auction = auction.join(factors, on=["symbol", "day"], how="left").with_columns(
-        pl.col("factor").fill_null(1.0)
-    )
-    mismatches = auction.filter(
-        pl.when(pl.col("factor") == 1.0)
-        .then(pl.col("minute_close") != pl.col("daily_close"))
-        .otherwise(
-            (pl.col("minute_close") * pl.col("factor") - pl.col("daily_close")).abs()
-            / pl.col("daily_close")
-            > 0.001
+    audited = (
+        merged.join(expected_close, on="day", how="left")
+        .filter(
+            (pl.col("last_ts") == pl.col("expected_close_ts"))
+            | (pl.col("last_ts") == pl.col("expected_close_ts") + CLOSE_VI_EXTENSION)
         )
-    ).sort("symbol", "day")
-    examples = []
-    for row in mismatches.head(10).iter_rows(named=True):
-        example = f"{row['symbol']} {row['day']}: {row['minute_close']} vs {row['daily_close']}"
-        if row["factor"] != 1.0:
-            example += f" (factor {row['factor']})"
-        examples.append(example)
-    return crosscheck_symbols, mismatches.height, examples
+        .filter(pl.col("daily_close") > 0)
+        .with_columns((pl.col("minute_close") / pl.col("daily_close")).alias("ratio"))
+    )
+    if audited.is_empty():
+        return crosscheck_symbols, 0, 0, []
+    mismatches = 0
+    restated_symbols = 0
+    examples: list[str] = []
+    for symbol in sorted(audited.select("symbol").unique().to_series().to_list()):
+        rows = audited.filter(pl.col("symbol") == symbol).sort("day").select("day", "ratio")
+        segments = _ratio_segments(rows.to_dicts())
+        if any(abs(ratio - 1.0) > RATIO_TOLERANCE for ratio, _ in segments):
+            restated_symbols += 1
+        for ratio, segment_days in _violating_segments(segments):
+            mismatches += len(segment_days)
+            if len(examples) < 10:
+                reason = "isolated segment" if len(segment_days) == 1 else "excess segment"
+                examples.append(f"{symbol} {segment_days[0]}: ratio {ratio:.3f} ({reason})")
+    return crosscheck_symbols, mismatches, restated_symbols, examples
 
 
-def _restatement_factors(series: ParquetStore | None, symbols: list[str]) -> pl.DataFrame:
-    schema = {"symbol": pl.Utf8(), "day": pl.Date(), "factor": pl.Float64()}
-    if series is None:
-        return pl.DataFrame(schema=schema)
-    frames = []
-    for symbol in symbols:
-        data = series.read(ADJUST_FACTORS, symbol)
-        if data is None or data.is_empty():
-            continue
-        frames.append(data.select(pl.lit(symbol).alias("symbol"), pl.col("day"), pl.col("factor")))
-    if not frames:
-        return pl.DataFrame(schema=schema)
-    return pl.concat(frames, how="vertical")
+def _ratio_segments(rows: list[dict[str, Any]]) -> list[tuple[float, list[date]]]:
+    segments: list[tuple[float, list[date]]] = []
+    previous: float | None = None
+    for row in rows:
+        ratio = float(row["ratio"])
+        if previous is None or abs(ratio - previous) > RATIO_TOLERANCE * abs(previous):
+            segments.append((ratio, [row["day"]]))
+        else:
+            segments[-1][1].append(row["day"])
+        previous = ratio
+    return segments
+
+
+def _violating_segments(
+    segments: list[tuple[float, list[date]]],
+) -> list[tuple[float, list[date]]]:
+    if len(segments) < 2:
+        return []
+    return [
+        segment
+        for index, segment in enumerate(segments)
+        if len(segment[1]) == 1 or index >= MAX_RATIO_SEGMENTS
+    ]

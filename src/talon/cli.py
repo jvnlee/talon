@@ -635,7 +635,6 @@ def kis_minutes_verify(start_text: str | None, end_text: str | None, symbols_sam
             cfg,
             cal=rt.cal,
             snapshots=rt.snapshots,
-            series=rt.series,
             start=start,
             end=end,
             symbols_sample=symbols_sample,

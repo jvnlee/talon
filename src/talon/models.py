@@ -220,6 +220,7 @@ class KisMinutesVerifyReport(BaseModel):
     out_of_session: int = 0
     crosscheck_symbols: int = 0
     crosscheck_mismatches: int = 0
+    restated_symbols: int = 0
     examples: list[str] = []
 
 
