@@ -55,21 +55,41 @@ def test_rounding_noise_snaps_to_single_step():
     assert factors["factor"][0] == pytest.approx(0.02, rel=1e-6)
 
 
-def test_suspension_zero_prices_are_excluded():
+def test_suspension_zero_prices_are_excluded_from_ratios_but_days_stay_covered():
     raw = series([1000, 1000, 1000])
     adjusted = series([1000, 0, 1000])
     factors = stepwise_factors(raw, adjusted)
 
-    assert factors.height == 2
-    assert factors["factor"].to_list() == pytest.approx([1.0, 1.0])
+    assert factors.height == 3
+    assert factors["factor"].to_list() == pytest.approx([1.0, 1.0, 1.0])
 
 
-def test_days_missing_from_adjusted_are_dropped():
+def test_days_missing_from_adjusted_carry_the_neighboring_factor():
     raw = series([1000, 1000, 1000])
     adjusted = series([1000, 1000])
     factors = stepwise_factors(raw, adjusted)
 
-    assert factors.height == 2
+    assert factors.height == 3
+    assert factors["day"].to_list() == raw["day"].to_list()
+    assert factors["factor"].to_list() == pytest.approx([1.0, 1.0, 1.0])
+
+
+def test_no_trade_day_missing_from_adjusted_stays_in_its_segment():
+    raw = series([2_650_000, 2_650_000, 53_000])
+    adjusted = series([53_000, 53_000, 53_000]).filter(pl.col("day") != BASE + timedelta(days=1))
+    factors = stepwise_factors(raw, adjusted)
+
+    assert factors["day"].to_list() == raw["day"].to_list()
+    assert factors["factor"].to_list() == pytest.approx([0.02, 0.02, 1.0])
+
+
+def test_leading_days_missing_from_adjusted_take_the_first_factor():
+    raw = series([2_650_000, 2_650_000, 53_000])
+    adjusted = series([53_000, 53_000, 53_000]).filter(pl.col("day") != BASE)
+    factors = stepwise_factors(raw, adjusted)
+
+    assert factors["day"].to_list() == raw["day"].to_list()
+    assert factors["factor"].to_list() == pytest.approx([0.02, 0.02, 1.0])
 
 
 def test_empty_inputs_return_empty_schema_frame():

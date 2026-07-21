@@ -28,7 +28,7 @@ def stepwise_factors(
     )
     if joined.is_empty():
         return pl.DataFrame(schema=FACTOR_SCHEMA)
-    return (
+    stepped = (
         joined.with_columns((pl.col("adj_close") / pl.col("raw_close")).alias("ratio"))
         .with_columns(
             ((pl.col("ratio") / pl.col("ratio").shift(1) - 1).abs() > jump_threshold)
@@ -38,6 +38,13 @@ def stepwise_factors(
         )
         .with_columns(pl.col("ratio").median().over("segment").alias("factor"))
         .select("day", "factor")
+    )
+    return (
+        raw.filter(pl.col("close") > 0)
+        .select("day")
+        .sort("day")
+        .join(stepped, on="day", how="left")
+        .with_columns(pl.col("factor").forward_fill().backward_fill())
     )
 
 
