@@ -10,11 +10,13 @@ import polars as pl
 from talon.config import TalonSettings
 from talon.data.state import StateDB
 from talon.data.store import (
+    ADJUST_FACTORS,
     DAILY_CANDLES,
     KIS_MINUTES,
     KIS_MINUTES_SCHEMA,
     STOCK_INFO,
     DatePartitionedStore,
+    ParquetStore,
 )
 from talon.errors import SourceError
 from talon.ingest.pool import parallel_fetch
@@ -41,6 +43,7 @@ MAX_FAILURE_RATIO = 0.1
 PROBE_SYMBOL = "005930"
 PROBE_WINDOW_DAYS = 420
 LATE_ANCHOR = "173000"
+CLOSE_VI_EXTENSION = timedelta(minutes=2)
 SESSION_SHIFTS: dict[date, timedelta] = {
     date(2025, 11, 13): timedelta(hours=1),
     date(2026, 11, 19): timedelta(hours=1),
@@ -60,9 +63,12 @@ def _session_close(cal: KrxCalendar, day: date) -> datetime:
 
 def _day_symbols(snapshots: DatePartitionedStore, day: date) -> list[str]:
     frame = snapshots.read_date(STOCK_INFO, day)
-    if frame is None or frame.is_empty():
-        raise SourceError(f"stock_info 없음: {day}")
-    return frame["symbol"].to_list()
+    if frame is not None and not frame.is_empty():
+        return frame["symbol"].to_list()
+    daily = snapshots.read_date(DAILY_CANDLES, day)
+    if daily is not None and not daily.is_empty():
+        return daily["symbol"].to_list()
+    raise SourceError(f"stock_info 없음: {day}")
 
 
 def _bar_ts(day: date, time_text: str) -> datetime:
@@ -354,6 +360,7 @@ def verify_kis_minutes(
     *,
     cal: KrxCalendar,
     snapshots: DatePartitionedStore,
+    series: ParquetStore | None = None,
     start: date | None = None,
     end: date | None = None,
     symbols_sample: int = 30,
@@ -371,13 +378,17 @@ def verify_kis_minutes(
 
     duplicate_keys = frame.height - frame.select("symbol", "ts").unique().height
     ohlc_violations = frame.filter(
-        (pl.col("low") > pl.min_horizontal("open", "close"))
-        | (pl.col("high") < pl.max_horizontal("open", "close"))
+        (pl.col("high") < pl.col("low"))
+        | (pl.col("low") > pl.col("close"))
+        | (pl.col("high") < pl.col("close"))
         | (pl.col("close") <= 0)
+    ).height
+    open_outliers = frame.filter(
+        (pl.col("open") < pl.col("low")) | (pl.col("open") > pl.col("high"))
     ).height
     out_of_session = _out_of_session(cal, frame)
     crosscheck_symbols, crosscheck_mismatches, examples = _crosscheck(
-        cal, snapshots, frame, symbols_sample
+        cal, snapshots, series, frame, symbols_sample
     )
     status = (
         "ok"
@@ -393,6 +404,7 @@ def verify_kis_minutes(
         rows=frame.height,
         duplicate_keys=duplicate_keys,
         ohlc_violations=ohlc_violations,
+        open_outliers=open_outliers,
         out_of_session=out_of_session,
         crosscheck_symbols=crosscheck_symbols,
         crosscheck_mismatches=crosscheck_mismatches,
@@ -406,7 +418,7 @@ def _out_of_session(cal: KrxCalendar, frame: pl.DataFrame) -> int:
         {
             "day": days,
             "session_open": [cal.session_open(day) for day in days],
-            "session_close": [_session_close(cal, day) for day in days],
+            "session_close": [_session_close(cal, day) + CLOSE_VI_EXTENSION for day in days],
         },
         schema={
             "day": pl.Date(),
@@ -423,6 +435,7 @@ def _out_of_session(cal: KrxCalendar, frame: pl.DataFrame) -> int:
 def _crosscheck(
     cal: KrxCalendar,
     snapshots: DatePartitionedStore,
+    series: ParquetStore | None,
     frame: pl.DataFrame,
     symbols_sample: int,
 ) -> tuple[int, int, list[str]]:
@@ -460,15 +473,43 @@ def _crosscheck(
         schema={"day": pl.Date(), "expected_close_ts": pl.Datetime("us", "UTC")},
     )
     auction = merged.join(expected_close, on="day", how="left").filter(
-        pl.col("last_ts") == pl.col("expected_close_ts")
+        (pl.col("last_ts") == pl.col("expected_close_ts"))
+        | (pl.col("last_ts") == pl.col("expected_close_ts") + CLOSE_VI_EXTENSION)
     )
     if auction.is_empty():
         return crosscheck_symbols, 0, []
-    mismatches = auction.filter(pl.col("minute_close") != pl.col("daily_close")).sort(
-        "symbol", "day"
+    factors = _restatement_factors(series, sampled)
+    auction = auction.join(factors, on=["symbol", "day"], how="left").with_columns(
+        pl.col("factor").fill_null(1.0)
     )
-    examples = [
-        f"{row['symbol']} {row['day']}: {row['minute_close']} vs {row['daily_close']}"
-        for row in mismatches.head(10).iter_rows(named=True)
-    ]
+    mismatches = auction.filter(
+        pl.when(pl.col("factor") == 1.0)
+        .then(pl.col("minute_close") != pl.col("daily_close"))
+        .otherwise(
+            (pl.col("minute_close") * pl.col("factor") - pl.col("daily_close")).abs()
+            / pl.col("daily_close")
+            > 0.001
+        )
+    ).sort("symbol", "day")
+    examples = []
+    for row in mismatches.head(10).iter_rows(named=True):
+        example = f"{row['symbol']} {row['day']}: {row['minute_close']} vs {row['daily_close']}"
+        if row["factor"] != 1.0:
+            example += f" (factor {row['factor']})"
+        examples.append(example)
     return crosscheck_symbols, mismatches.height, examples
+
+
+def _restatement_factors(series: ParquetStore | None, symbols: list[str]) -> pl.DataFrame:
+    schema = {"symbol": pl.Utf8(), "day": pl.Date(), "factor": pl.Float64()}
+    if series is None:
+        return pl.DataFrame(schema=schema)
+    frames = []
+    for symbol in symbols:
+        data = series.read(ADJUST_FACTORS, symbol)
+        if data is None or data.is_empty():
+            continue
+        frames.append(data.select(pl.lit(symbol).alias("symbol"), pl.col("day"), pl.col("factor")))
+    if not frames:
+        return pl.DataFrame(schema=schema)
+    return pl.concat(frames, how="vertical")

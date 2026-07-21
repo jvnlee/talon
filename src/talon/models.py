@@ -216,6 +216,7 @@ class KisMinutesVerifyReport(BaseModel):
     rows: int = 0
     duplicate_keys: int = 0
     ohlc_violations: int = 0
+    open_outliers: int = 0
     out_of_session: int = 0
     crosscheck_symbols: int = 0
     crosscheck_mismatches: int = 0

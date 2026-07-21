@@ -6,7 +6,9 @@ import polars as pl
 import pytest
 
 from conftest import write_stock_info
+from talon.data.adjust import FACTOR_SCHEMA
 from talon.data.store import (
+    ADJUST_FACTORS,
     DAILY_CANDLES,
     DAILY_SNAPSHOT_SCHEMA,
     KIS_MINUTES,
@@ -14,6 +16,7 @@ from talon.data.store import (
 )
 from talon.errors import SourceError
 from talon.ingest.kis_minutes import (
+    _day_symbols,
     backfill_kis_minutes,
     daily_kis_minutes,
     probe_kis_minutes,
@@ -642,6 +645,131 @@ def _daily_frame(day, symbol, close):
         },
         schema=DAILY_SNAPSHOT_SCHEMA,
     )
+
+
+def _factor_frame(days_factors):
+    return pl.DataFrame(
+        {"day": [d for d, _ in days_factors], "factor": [f for _, f in days_factors]},
+        schema=FACTOR_SCHEMA,
+    )
+
+
+def _quirk_row(day, symbol, ts, *, open, high, low, close):
+    return {
+        "day": day,
+        "symbol": symbol,
+        "ts": ts,
+        "open": open,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": 10.0,
+        "cum_value": 1.0,
+        "fetched_at": datetime(2026, 7, 16, tzinfo=UTC),
+    }
+
+
+def test_verify_admits_close_vi_extension_bar(cfg, cal, snapshots):
+    day = date(2026, 7, 10)
+    frame = _minutes_frame(day, "005930", [("153200", 100.0), ("153300", 100.0)])
+    snapshots.write_date(KIS_MINUTES, day, frame)
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots)
+    assert report.out_of_session == 1
+
+
+def test_verify_crosscheck_accepts_close_vi_extension_bar(cfg, cal, snapshots):
+    day = date(2026, 7, 10)
+    frame = _minutes_frame(day, "005930", [("100000", 70500.0), ("153200", 70500.0)])
+    snapshots.write_date(KIS_MINUTES, day, frame)
+    snapshots.write_date(DAILY_CANDLES, day, _daily_frame(day, "005930", 70500.0))
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots)
+    assert report.out_of_session == 0
+    assert report.crosscheck_symbols == 1
+    assert report.crosscheck_mismatches == 0
+
+
+def test_verify_crosscheck_restated_symbol_is_clean(cfg, cal, snapshots, series):
+    day = date(2026, 7, 10)
+    snapshots.write_date(KIS_MINUTES, day, _minutes_frame(day, "005930", [("153000", 1000.0)]))
+    snapshots.write_date(DAILY_CANDLES, day, _daily_frame(day, "005930", 500.0))
+    series.replace(ADJUST_FACTORS, "005930", _factor_frame([(day, 0.5)]))
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots, series=series)
+    assert report.crosscheck_symbols == 1
+    assert report.crosscheck_mismatches == 0
+
+
+def test_verify_crosscheck_restated_symbol_still_flags_divergence(cfg, cal, snapshots, series):
+    day = date(2026, 7, 10)
+    snapshots.write_date(KIS_MINUTES, day, _minutes_frame(day, "000660", [("153000", 1000.0)]))
+    snapshots.write_date(DAILY_CANDLES, day, _daily_frame(day, "000660", 600.0))
+    series.replace(ADJUST_FACTORS, "000660", _factor_frame([(day, 0.5)]))
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots, series=series)
+    assert report.crosscheck_mismatches == 1
+    assert any("factor" in example for example in report.examples)
+
+
+def test_verify_crosscheck_factor_defaults_without_adjust_file(cfg, cal, snapshots, series):
+    day = date(2026, 7, 10)
+    snapshots.write_date(KIS_MINUTES, day, _minutes_frame(day, "005930", [("153000", 70500.0)]))
+    snapshots.write_date(DAILY_CANDLES, day, _daily_frame(day, "005930", 70500.0))
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots, series=series)
+    assert report.crosscheck_mismatches == 0
+
+
+def test_day_symbols_falls_back_to_daily_candles(snapshots):
+    day = date(2026, 7, 10)
+    snapshots.write_date(DAILY_CANDLES, day, _daily_frame(day, "005930", 70000.0))
+    assert _day_symbols(snapshots, day) == ["005930"]
+
+
+def test_day_symbols_errors_when_stock_info_and_daily_absent(snapshots):
+    with pytest.raises(SourceError, match="stock_info"):
+        _day_symbols(snapshots, date(2026, 7, 10))
+
+
+def test_verify_open_only_outlier_is_informational(cfg, cal, snapshots):
+    day = date(2026, 7, 10)
+    quirk = _quirk_row(
+        day,
+        "005930",
+        to_utc(datetime(2026, 7, 10, 9, 0)),
+        open=80.0,
+        high=105.0,
+        low=100.0,
+        close=102.0,
+    )
+    frame = _minutes_frame(day, "005930", [("153000", 70500.0)], extra_rows=[quirk])
+    snapshots.write_date(KIS_MINUTES, day, frame)
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots)
+    assert report.open_outliers == 1
+    assert report.ohlc_violations == 0
+    assert report.status == "ok"
+
+
+def test_verify_hlc_violation_flips_status(cfg, cal, snapshots):
+    day = date(2026, 7, 10)
+    bad = _quirk_row(
+        day,
+        "005930",
+        to_utc(datetime(2026, 7, 10, 9, 2)),
+        open=106.0,
+        high=110.0,
+        low=105.0,
+        close=100.0,
+    )
+    frame = _minutes_frame(day, "005930", [("153000", 70500.0)], extra_rows=[bad])
+    snapshots.write_date(KIS_MINUTES, day, frame)
+
+    report = verify_kis_minutes(cfg, cal=cal, snapshots=snapshots)
+    assert report.ohlc_violations == 1
+    assert report.open_outliers == 0
+    assert report.status == "issues"
 
 
 @pytest.mark.parametrize("empty_dataset", [True, False])
