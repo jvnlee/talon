@@ -47,9 +47,7 @@ def factor_frame(pairs):
 def minute_frame(day, points):
     return pl.DataFrame(
         {
-            "ts": [
-                datetime.combine(day, point[0], tzinfo=KST).astimezone(UTC) for point in points
-            ],
+            "ts": [datetime.combine(day, point[0], tzinfo=KST).astimezone(UTC) for point in points],
             "open": [float(point[1]) for point in points],
             "high": [float(point[2]) for point in points],
             "low": [float(point[3]) for point in points],
@@ -412,3 +410,37 @@ def test_panel_nulls_limits_on_reevaluated_base(snapshots, series):
     row = panel.filter(pl.col("day") == d1).row(0, named=True)
     assert row["limit_up_price"] is None
     assert row["limit_up"] is None
+
+
+def test_panel_bridged_reduction_yields_base_relative_returns(snapshots, series):
+    d0, d1 = date(2026, 5, 7), date(2026, 5, 8)
+    snapshots.write_date(
+        DAILY_CANDLES, d0, snapshot_frame(d0, [{"symbol": "GAMJA", "open": 293, "close": 293}])
+    )
+    snapshots.write_date(
+        DAILY_CANDLES,
+        d1,
+        snapshot_frame(
+            d1,
+            [
+                {
+                    "symbol": "GAMJA",
+                    "open": 5070,
+                    "high": 5070,
+                    "low": 4530,
+                    "close": 4530,
+                    "change_pct": -10.65,
+                }
+            ],
+        ),
+    )
+    base = 4530 / (1 - 0.1065)
+    series.replace(ADJUST_FACTORS, "GAMJA", factor_frame([(d0, base / 293), (d1, 1.0)]))
+    write_stock_info(snapshots, [d0, d1], ["GAMJA"])
+
+    panel = load_panel(snapshots, series)
+    row = panel.filter(pl.col("day") == d1).row(0, named=True)
+    assert row["prev_close"] == pytest.approx(base)
+    assert row["overnight_ret"] == pytest.approx(5070 / base - 1, abs=1e-4)
+    assert row["intraday_ret"] == pytest.approx(4530 / 5070 - 1)
+    assert row["limit_up_price"] is None

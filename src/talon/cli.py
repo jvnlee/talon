@@ -1613,6 +1613,33 @@ def adjust_build(force: bool, symbols: tuple[str, ...], throttle: float) -> None
     click.echo(summary.model_dump_json())
 
 
+@adjust.command("rebase")
+@click.option("--symbol", "symbols", multiple=True)
+def adjust_rebase(symbols: tuple[str, ...]) -> None:
+    from talon.ingest.factors import rebase_factors
+
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "adjust.lock") as acquired:
+        if not acquired:
+            click.echo("adjust 잡이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+
+            def report(index: int, total: int, symbol: str) -> None:
+                if index % 500 == 0 or index == total:
+                    click.echo(f"{index}/{total} {symbol}")
+
+            summary = rebase_factors(
+                cfg,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                series=rt.series,
+                symbols=list(symbols) or None,
+                progress=report,
+            )
+    click.echo(summary.model_dump_json())
+
+
 @main.group()
 def index() -> None:
     pass

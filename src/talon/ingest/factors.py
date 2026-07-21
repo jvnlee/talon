@@ -6,7 +6,7 @@ from datetime import date
 import polars as pl
 
 from talon.config import TalonSettings
-from talon.data.adjust import stepwise_factors
+from talon.data.adjust import rebase_missed_events, stepwise_factors
 from talon.data.state import StateDB
 from talon.data.store import (
     ADJUST_FACTORS,
@@ -41,9 +41,9 @@ def _load_raw_closes(snapshots: DatePartitionedStore) -> dict[str, pl.DataFrame]
     scan = snapshots.scan(DAILY_CANDLES)
     if scan is None:
         return {}
-    raw = scan.select("day", "symbol", "close").collect()
+    raw = scan.select("day", "symbol", "close", "change_pct").collect()
     return {
-        str(key[0]): frame.select("day", "close").sort("day")
+        str(key[0]): frame.select("day", "close", "change_pct").sort("day")
         for key, frame in raw.partition_by("symbol", as_dict=True).items()
     }
 
@@ -95,6 +95,7 @@ def build_factors(
     skipped = 0
     empty: list[str] = []
     failed: list[str] = []
+    rebased: list[str] = []
     manifest_rows: list[dict[str, object]] = []
     for index, symbol in enumerate(targets, start=1):
         raw = raw_by_symbol.get(symbol)
@@ -123,9 +124,13 @@ def build_factors(
                 empty.append(symbol)
                 manifest_rows.append(_manifest_row(symbol, "empty", raw.height, last_raw_day, None))
             else:
-                series.replace(ADJUST_FACTORS, symbol, factors)
+                bridged = rebase_missed_events(factors, raw)
+                if not bridged.equals(factors):
+                    rebased.append(symbol)
+                    log.info("missed corporate action bridged for %s", symbol)
+                series.replace(ADJUST_FACTORS, symbol, bridged)
                 computed += 1
-                manifest_rows.append(_manifest_row(symbol, "ok", raw.height, last_raw_day, factors))
+                manifest_rows.append(_manifest_row(symbol, "ok", raw.height, last_raw_day, bridged))
         if progress is not None:
             progress(index, len(targets), symbol)
         if throttle > 0:
@@ -141,6 +146,7 @@ def build_factors(
         skipped=skipped,
         empty=empty,
         failed=failed,
+        rebased=rebased,
     )
     detail = summary.model_dump(mode="json")
     state.heartbeat("adjust-build", status == "ok", detail)
@@ -150,4 +156,52 @@ def build_factors(
             "adjust-failed",
             f"수정계수 산출 실패 {len(failed)}종목: {', '.join(failed[:5])}",
         )
+    return summary
+
+
+def rebase_factors(
+    cfg: TalonSettings,
+    *,
+    state: StateDB,
+    snapshots: DatePartitionedStore,
+    series: ParquetStore,
+    symbols: list[str] | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> AdjustSummary:
+    raw_by_symbol = _load_raw_closes(snapshots)
+    if not raw_by_symbol:
+        return AdjustSummary(status="no-data")
+    stored = series.names(ADJUST_FACTORS)
+    targets = sorted(set(symbols)) if symbols else stored
+    run_id = state.start_job("adjust-rebase")
+    computed = 0
+    skipped = 0
+    rebased: list[str] = []
+    failed: list[str] = []
+    for index, symbol in enumerate(targets, start=1):
+        raw = raw_by_symbol.get(symbol)
+        factors = series.read(ADJUST_FACTORS, symbol)
+        if raw is None or factors is None:
+            failed.append(symbol)
+            log.warning("no factors or daily snapshot rows for %s", symbol)
+            continue
+        bridged = rebase_missed_events(factors, raw)
+        if bridged.equals(factors):
+            skipped += 1
+        else:
+            series.replace(ADJUST_FACTORS, symbol, bridged)
+            computed += 1
+            rebased.append(symbol)
+        if progress is not None:
+            progress(index, len(targets), symbol)
+    status = "ok" if not failed else "partial"
+    summary = AdjustSummary(
+        status=status,
+        symbols=len(targets),
+        computed=computed,
+        skipped=skipped,
+        failed=failed,
+        rebased=rebased,
+    )
+    state.finish_job(run_id, status == "ok", summary.model_dump(mode="json"))
     return summary

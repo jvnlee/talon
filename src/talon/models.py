@@ -256,6 +256,7 @@ class AdjustSummary(BaseModel):
     skipped: int = 0
     empty: list[str] = []
     failed: list[str] = []
+    rebased: list[str] = []
 
 
 class WatchdogSummary(BaseModel):

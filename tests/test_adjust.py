@@ -3,7 +3,12 @@ from datetime import date, timedelta
 import polars as pl
 import pytest
 
-from talon.data.adjust import FACTOR_SCHEMA, apply_factors, stepwise_factors
+from talon.data.adjust import (
+    FACTOR_SCHEMA,
+    apply_factors,
+    rebase_missed_events,
+    stepwise_factors,
+)
 
 BASE = date(2018, 4, 30)
 
@@ -14,6 +19,23 @@ def series(closes, start=BASE):
         {"day": days, "close": [float(c) for c in closes]},
         schema={"day": pl.Date(), "close": pl.Float64()},
     )
+
+
+def raw_series(closes, pcts, start=BASE):
+    days = [start + timedelta(days=i) for i in range(len(closes))]
+    return pl.DataFrame(
+        {
+            "day": days,
+            "close": [float(c) for c in closes],
+            "change_pct": [None if p is None else float(p) for p in pcts],
+        },
+        schema={"day": pl.Date(), "close": pl.Float64(), "change_pct": pl.Float64()},
+    )
+
+
+def flat_factors(count, start=BASE):
+    days = [start + timedelta(days=i) for i in range(count)]
+    return pl.DataFrame({"day": days, "factor": [1.0] * count}, schema=FACTOR_SCHEMA)
 
 
 def test_split_produces_two_factor_steps():
@@ -56,6 +78,91 @@ def test_empty_inputs_return_empty_schema_frame():
 
     assert factors.is_empty()
     assert dict(factors.schema) == FACTOR_SCHEMA
+
+
+def test_rebase_bridges_missed_capital_reduction():
+    raw = raw_series([293, 293, 4530], [0.0, 0.0, -10.65])
+    bridged = rebase_missed_events(flat_factors(3), raw)
+
+    ratio = (4530 / (1 - 0.1065)) / 293
+    assert bridged["factor"].to_list() == pytest.approx([ratio, ratio, 1.0])
+
+
+def test_rebase_keeps_events_already_adjusted():
+    raw = raw_series([2_650_000, 53_000], [0.0, 0.0])
+    factors = pl.DataFrame(
+        {"day": [BASE, BASE + timedelta(days=1)], "factor": [0.02, 1.0]},
+        schema=FACTOR_SCHEMA,
+    )
+    bridged = rebase_missed_events(factors, raw)
+
+    assert bridged["factor"].to_list() == pytest.approx([0.02, 1.0])
+
+
+def test_rebase_reconciles_partial_adjustments():
+    raw = raw_series([1000, 400], [0.0, 0.0])
+    factors = pl.DataFrame(
+        {"day": [BASE, BASE + timedelta(days=1)], "factor": [0.5, 1.0]},
+        schema=FACTOR_SCHEMA,
+    )
+    bridged = rebase_missed_events(factors, raw)
+
+    assert bridged["factor"].to_list() == pytest.approx([0.4, 1.0])
+
+
+def test_rebase_composes_multiple_missed_events():
+    raw = raw_series([100, 100, 1000, 1000, 3000], [0.0] * 5)
+    bridged = rebase_missed_events(flat_factors(5), raw)
+
+    assert bridged["factor"].to_list() == pytest.approx([30.0, 30.0, 3.0, 3.0, 1.0])
+
+
+def test_rebase_is_idempotent():
+    raw = raw_series([293, 293, 4530], [0.0, 0.0, -10.65])
+    once = rebase_missed_events(flat_factors(3), raw)
+    twice = rebase_missed_events(once, raw)
+
+    assert twice["factor"].to_list() == pytest.approx(once["factor"].to_list())
+
+
+def test_rebase_ignores_null_change_pct():
+    raw = raw_series([1000, 15_000], [0.0, None])
+    bridged = rebase_missed_events(flat_factors(2), raw)
+
+    assert bridged["factor"].to_list() == pytest.approx([1.0, 1.0])
+
+
+def test_rebase_ignores_total_loss_change_pct():
+    raw = raw_series([1000, 15_000], [0.0, -100.0])
+    bridged = rebase_missed_events(flat_factors(2), raw)
+
+    assert bridged["factor"].to_list() == pytest.approx([1.0, 1.0])
+
+
+def test_rebase_ignores_base_gaps_below_threshold():
+    raw = raw_series([1000, 1003], [0.0, 0.0])
+    bridged = rebase_missed_events(flat_factors(2), raw)
+
+    assert bridged["factor"].to_list() == pytest.approx([1.0, 1.0])
+
+
+def test_rebase_requires_prior_factor_day():
+    raw = raw_series([1000, 10_000], [0.0, 0.0])
+    factors = pl.DataFrame(
+        {"day": [BASE + timedelta(days=1)], "factor": [1.0]},
+        schema=FACTOR_SCHEMA,
+    )
+    bridged = rebase_missed_events(factors, raw)
+
+    assert bridged["factor"].to_list() == pytest.approx([1.0])
+
+
+def test_rebase_empty_factors_pass_through():
+    raw = raw_series([1000], [0.0])
+    factors = pl.DataFrame(schema=FACTOR_SCHEMA)
+    bridged = rebase_missed_events(factors, raw)
+
+    assert bridged.is_empty()
 
 
 def test_apply_factors_scales_prices_and_volume():
