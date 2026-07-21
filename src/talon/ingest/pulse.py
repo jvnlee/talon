@@ -19,9 +19,8 @@ from talon.data.store import (
 )
 from talon.models import PulseSummary
 from talon.sources.dart import fetch_filings
-from talon.sources.investing import fetch_vkospi
 from talon.sources.krx_daily import KrxCredentials
-from talon.sources.krx_index import fetch_index_snapshot
+from talon.sources.krx_index import fetch_index_snapshot, fetch_vkospi
 from talon.sources.yahoo import fetch_quote
 from talon.timeutil import now_utc
 
@@ -31,7 +30,7 @@ INDEX_MARKETS = ("KOSPI", "KOSDAQ")
 MACRO_SERIES = (("USDKRW", "KRW=X"), ("ES_F", "ES=F"), ("NQ_F", "NQ=F"))
 MACRO_SOURCE = "yahoo"
 VKOSPI_SERIES = "VKOSPI"
-VKOSPI_SOURCE = "investing"
+VKOSPI_SOURCE = "krx"
 ALL_MARKETS = "ALL"
 INDEX_KEY = ("slot", "market", "name")
 MACRO_KEY = ("slot", "series")
@@ -51,7 +50,7 @@ def collect_pulse(
     captured_at = now_utc()
     _run_part(summary, "index", lambda: _collect_index(cfg, snapshots, slot, day, captured_at))
     _run_part(summary, "macro", lambda: collect_macro(snapshots, slot, day, captured_at))
-    _run_part(summary, "vkospi", lambda: _collect_vkospi(snapshots, slot, day, captured_at))
+    _run_part(summary, "vkospi", lambda: _collect_vkospi(cfg, snapshots, slot, day, captured_at))
     _run_part(
         summary,
         "breadth",
@@ -134,12 +133,17 @@ def collect_macro(
 
 
 def _collect_vkospi(
+    cfg: TalonSettings,
     snapshots: DatePartitionedStore,
     slot: str,
     day: date,
     captured_at: datetime,
 ) -> tuple[str, int]:
-    quote = fetch_vkospi()
+    if not cfg.krx_login_configured:
+        return "skipped-no-credentials", 0
+    quote = fetch_vkospi(
+        day=day, credentials=KrxCredentials(cfg.krx_id, cfg.krx_password)
+    )
     frame = pl.DataFrame(
         [
             {

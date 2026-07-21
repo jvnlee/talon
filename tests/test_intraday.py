@@ -6,8 +6,7 @@ import pytest
 from talon.data.store import DAILY_SNAPSHOT_SCHEMA, INTRADAY_SNAPSHOT, MACRO_INTRADAY
 from talon.errors import SourceError
 from talon.ingest.intraday import AUCTION_SLOT, DECISION_SLOT, run_intraday
-from talon.sources.investing import VkospiQuote
-from talon.sources.krx_index import INDEX_SNAPSHOT_SCHEMA
+from talon.sources.krx_index import INDEX_SNAPSHOT_SCHEMA, VkospiQuote
 from talon.sources.yahoo import YahooQuote
 
 DAY = date(2026, 7, 14)

@@ -13,8 +13,7 @@ from talon.data.store import (
 from talon.errors import SourceError
 from talon.ingest.pulse import collect_pulse
 from talon.sources.dart import DART_FILINGS_SCHEMA
-from talon.sources.investing import VkospiQuote
-from talon.sources.krx_index import INDEX_SNAPSHOT_SCHEMA
+from talon.sources.krx_index import INDEX_SNAPSHOT_SCHEMA, VkospiQuote
 from talon.sources.yahoo import YahooQuote
 
 DAY = date(2026, 7, 14)
@@ -121,7 +120,7 @@ def test_macro_records_all_series(pulse_cfg, snapshots):
     stored = snapshots.read_date(MACRO_INTRADAY, DAY)
     assert sorted(stored["series"].to_list()) == ["ES_F", "NQ_F", "USDKRW", "VKOSPI"]
     by_series = {row["series"]: row for row in stored.to_dicts()}
-    assert by_series["VKOSPI"]["source"] == "investing"
+    assert by_series["VKOSPI"]["source"] == "krx"
     assert by_series["VKOSPI"]["price"] == 32.15
     assert by_series["USDKRW"]["source"] == "yahoo"
 
@@ -201,6 +200,7 @@ def test_index_skipped_without_credentials(pulse_cfg, snapshots):
     summary = run(pulse_cfg, snapshots, stock_frame())
 
     assert summary.parts["index"] == "skipped-no-credentials"
+    assert summary.parts["vkospi"] == "skipped-no-credentials"
     assert snapshots.read_date(INDEX_INTRADAY, DAY) is None
 
 
