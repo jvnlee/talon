@@ -450,6 +450,57 @@ def backfill_daily_command(years: int | None, start_text: str | None, end_text: 
     click.echo(summary.model_dump_json())
 
 
+@main.command(
+    "repair-daily",
+    help="저장된 일봉에서 무거래일(거래정지·기세) 행 결손을 marcap 원천으로 복원하고 "
+    "영향 종목의 수정계수를 재산출한다.",
+)
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--skip-adjust", is_flag=True)
+@click.option("--throttle", type=float, default=0.2, show_default=True)
+def repair_daily_command(
+    start_text: str | None,
+    end_text: str | None,
+    skip_adjust: bool,
+    throttle: float,
+) -> None:
+    from talon.ingest.repair import repair_daily_gaps
+
+    cfg = load_settings()
+    with (
+        job_lock(cfg.locks_dir / "backfill.lock") as backfill_acquired,
+        job_lock(cfg.locks_dir / "adjust.lock") as adjust_acquired,
+    ):
+        if not backfill_acquired or not adjust_acquired:
+            click.echo("backfill 또는 adjust 잡이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+
+            def report_day(index: int, total: int, day: date) -> None:
+                if index % 250 == 0 or index == total:
+                    click.echo(f"days {index}/{total} {day}")
+
+            def report_symbol(index: int, total: int, symbol: str) -> None:
+                if index % 100 == 0 or index == total:
+                    click.echo(f"factors {index}/{total} {symbol}")
+
+            summary = repair_daily_gaps(
+                cfg,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                series=rt.series,
+                alerter=rt.alerter,
+                start=date.fromisoformat(start_text) if start_text else None,
+                end=date.fromisoformat(end_text) if end_text else None,
+                rebuild_factors=not skip_adjust,
+                throttle=throttle,
+                progress=report_day,
+                factor_progress=report_symbol,
+            )
+    click.echo(summary.model_dump_json())
+
+
 @main.command()
 @click.option("--days", type=int, default=None, help="되돌아볼 거래일 수")
 @click.option("--start", "start_text", default=None, help="YYYY-MM-DD")

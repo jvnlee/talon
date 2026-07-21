@@ -259,6 +259,16 @@ class AdjustSummary(BaseModel):
     rebased: list[str] = []
 
 
+class RepairSummary(BaseModel):
+    status: str
+    sessions: int = 0
+    repaired_days: int = 0
+    inserted_rows: int = 0
+    affected_symbols: list[str] = []
+    uncovered: list[str] = []
+    adjust: AdjustSummary | None = None
+
+
 class WatchdogSummary(BaseModel):
     status: str
     issues: list[str] = []
