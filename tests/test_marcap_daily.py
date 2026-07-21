@@ -92,6 +92,38 @@ def test_snapshot_maps_columns_and_filters(tmp_path):
     assert cap_row["shares"] == 5846278608.0
 
 
+def test_snapshot_keeps_no_trade_rows_with_null_prices(tmp_path):
+    frame = year_frame(
+        [
+            {"code": "005930", "day": DAY_1, "close": 278000.0, "shares": 5846278608},
+            {
+                "code": "076340",
+                "day": DAY_1,
+                "close": 3760.0,
+                "open": 0.0,
+                "high": 0.0,
+                "low": 0.0,
+                "volume": 0.0,
+                "amount": 0.0,
+                "change": 14.81,
+                "shares": 4871460,
+            },
+        ]
+    )
+    with make_source(tmp_path, default_payloads(frame))[0] as source:
+        daily, caps = source.snapshot(DAY_1)
+
+    assert daily.get_column("symbol").to_list() == ["005930", "076340"]
+    row = daily.filter(pl.col("symbol") == "076340").row(0, named=True)
+    assert row["open"] is None
+    assert row["high"] is None
+    assert row["low"] is None
+    assert row["close"] == 3760.0
+    assert row["volume"] == 0.0
+    assert row["change_pct"] == 14.81
+    assert caps.filter(pl.col("symbol") == "076340").height == 1
+
+
 def test_year_file_downloaded_once_and_cached(tmp_path):
     frame = year_frame(
         [

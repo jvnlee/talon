@@ -70,9 +70,7 @@ def test_snapshot_maps_krx_fields():
     assert cap_row["shares"] == 5_969_782_550.0
 
 
-def test_snapshot_drops_halted_zero_price_rows():
-    """거래정지 종목은 시가/고가/저가가 0으로 온다. marcap·pykrx와 같은 기준으로 걸러야
-    reconcile이 매일 같은 종목을 '신규'로 오인하지 않는다."""
+def test_snapshot_keeps_halted_rows_with_null_prices():
     source = source_with(
         {
             "stk_bydd_trd": ok(
@@ -82,8 +80,13 @@ def test_snapshot_drops_halted_zero_price_rows():
         }
     )
     daily, caps = source.snapshot(DAY)
-    assert daily["symbol"].to_list() == ["005930"]
-    assert caps["symbol"].to_list() == ["005930"]
+    assert daily["symbol"].to_list() == ["000000", "005930"]
+    assert caps["symbol"].to_list() == ["000000", "005930"]
+    halted = daily.filter(daily["symbol"] == "000000").row(0, named=True)
+    assert halted["open"] is None
+    assert halted["high"] is None
+    assert halted["low"] is None
+    assert halted["close"] == 70000.0
 
 
 def test_empty_response_means_no_data_not_an_error():

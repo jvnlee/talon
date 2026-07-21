@@ -33,10 +33,14 @@ def test_listing_parses_and_filters(monkeypatch):
     daily, caps = fetch_krx_listing(DAY)
 
     assert dict(daily.schema) == DAILY_SNAPSHOT_SCHEMA
-    assert daily.get_column("symbol").to_list() == ["005930", "000660"]
-    assert daily.get_column("close").to_list() == [70500.0, 252000.0]
-    assert daily.get_column("value").to_list() == [5e12, 3e12]
-    assert daily.get_column("day").to_list() == [DAY, DAY]
+    assert daily.get_column("symbol").to_list() == ["005930", "000660", "888880"]
+    assert daily.get_column("close").to_list() == [70500.0, 252000.0, 1000.0]
+    assert daily.get_column("value").to_list() == [5e12, 3e12, 0.0]
+    assert daily.get_column("day").to_list() == [DAY, DAY, DAY]
+    halted = daily.row(2, named=True)
+    assert halted["open"] is None
+    assert halted["high"] is None
+    assert halted["low"] is None
 
     assert dict(caps.schema) == MARKET_CAP_SCHEMA
     assert caps.get_column("symbol").to_list() == ["005930", "000660", "888880"]
@@ -61,4 +65,4 @@ def test_listing_optional_columns_null(monkeypatch):
     pdf = listing_pdf().drop(columns=["ChagesRatio"])
     monkeypatch.setattr("FinanceDataReader.StockListing", lambda market: pdf)
     daily, _ = fetch_krx_listing(DAY)
-    assert daily.get_column("change_pct").to_list() == [None, None]
+    assert daily.get_column("change_pct").to_list() == [None, None, None]

@@ -6,7 +6,7 @@ from typing import Any
 
 import polars as pl
 
-from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA
+from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA, normalize_daily_snapshot
 from talon.errors import SchemaDriftError, SourceError
 
 log = logging.getLogger(__name__)
@@ -102,16 +102,18 @@ def fetch_krx_listing(
         "volume": column("Volume"),
         "value": column("Amount"),
     }
-    daily = pl.DataFrame(
-        {
-            **base,
-            "open": column("Open"),
-            "high": column("High"),
-            "low": column("Low"),
-            "change_pct": column("ChagesRatio"),
-        },
-        schema=DAILY_SNAPSHOT_SCHEMA,
-    ).filter((pl.col("close") > 0) & (pl.col("high") > 0))
+    daily = normalize_daily_snapshot(
+        pl.DataFrame(
+            {
+                **base,
+                "open": column("Open"),
+                "high": column("High"),
+                "low": column("Low"),
+                "change_pct": column("ChagesRatio"),
+            },
+            schema=DAILY_SNAPSHOT_SCHEMA,
+        )
+    )
     caps = pl.DataFrame(
         {
             **base,

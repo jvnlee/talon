@@ -483,6 +483,17 @@ INVESTOR_SCHEMA: dict[str, pl.DataType] = {
 }
 
 
+def normalize_daily_snapshot(frame: pl.DataFrame) -> pl.DataFrame:
+    no_trade = pl.col("high").is_null() | (pl.col("high") <= 0)
+    return frame.filter(pl.col("close") > 0).with_columns(
+        pl.when(no_trade)
+        .then(pl.lit(None, dtype=pl.Float64))
+        .otherwise(pl.col(column))
+        .alias(column)
+        for column in ("open", "high", "low")
+    )
+
+
 def candles_to_frame(candles: list[Candle]) -> pl.DataFrame:
     rows = [candle.model_dump() for candle in candles]
     return pl.DataFrame(rows, schema=CANDLE_SCHEMA)

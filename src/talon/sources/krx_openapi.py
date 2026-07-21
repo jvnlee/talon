@@ -7,7 +7,12 @@ from typing import Any
 import httpx
 import polars as pl
 
-from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA, STOCK_INFO_SCHEMA
+from talon.data.store import (
+    DAILY_SNAPSHOT_SCHEMA,
+    MARKET_CAP_SCHEMA,
+    STOCK_INFO_SCHEMA,
+    normalize_daily_snapshot,
+)
 from talon.errors import SchemaDriftError, SourceError
 
 log = logging.getLogger(__name__)
@@ -39,8 +44,6 @@ _INFO_FIELDS = (
     "LIST_DD",
     "LIST_SHRS",
 )
-
-_TRADABLE = (pl.col("close") > 0) & (pl.col("high") > 0)
 
 
 def _number(raw: Any) -> float | None:
@@ -194,10 +197,10 @@ class KrxOpenApiSource:
             },
             schema=MARKET_CAP_SCHEMA,
         )
-        tradable = daily.filter(_TRADABLE).sort("symbol")
+        listed = normalize_daily_snapshot(daily).sort("symbol")
         return (
-            tradable,
-            caps.join(tradable.select("symbol"), on="symbol", how="semi")
+            listed,
+            caps.join(listed.select("symbol"), on="symbol", how="semi")
             .filter(pl.col("cap") > 0)
             .sort("symbol"),
         )

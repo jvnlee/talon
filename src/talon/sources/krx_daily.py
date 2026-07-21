@@ -7,7 +7,7 @@ from typing import Any, NamedTuple
 
 import polars as pl
 
-from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA
+from talon.data.store import DAILY_SNAPSHOT_SCHEMA, MARKET_CAP_SCHEMA, normalize_daily_snapshot
 from talon.errors import SchemaDriftError, SourceError
 
 log = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ def fetch_daily_ohlcv(
     frame = _snapshot_frame(pdf, day, _OHLCV_COLUMNS, _OHLCV_REQUIRED, DAILY_SNAPSHOT_SCHEMA)
     if frame.is_empty():
         return frame
-    return frame.filter((pl.col("close") > 0) & (pl.col("high") > 0))
+    return normalize_daily_snapshot(frame)
 
 
 def fetch_market_cap(

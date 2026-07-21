@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import polars as pl
 
+from talon.data.store import normalize_daily_snapshot
 from talon.errors import SchemaDriftError, SourceError
 
 log = logging.getLogger(__name__)
@@ -128,17 +129,19 @@ class MarcapSource:
             if "ChangesRatio" in rows.columns
             else pl.lit(None, dtype=pl.Float64)
         )
-        daily = rows.select(
-            pl.lit(day).alias("day"),
-            pl.col("Code").cast(pl.Utf8).alias("symbol"),
-            pl.col("Open").cast(pl.Float64).alias("open"),
-            pl.col("High").cast(pl.Float64).alias("high"),
-            pl.col("Low").cast(pl.Float64).alias("low"),
-            pl.col("Close").cast(pl.Float64).alias("close"),
-            pl.col("Volume").cast(pl.Float64).alias("volume"),
-            pl.col("Amount").cast(pl.Float64).alias("value"),
-            change_pct.alias("change_pct"),
-        ).filter((pl.col("close") > 0) & (pl.col("high") > 0))
+        daily = normalize_daily_snapshot(
+            rows.select(
+                pl.lit(day).alias("day"),
+                pl.col("Code").cast(pl.Utf8).alias("symbol"),
+                pl.col("Open").cast(pl.Float64).alias("open"),
+                pl.col("High").cast(pl.Float64).alias("high"),
+                pl.col("Low").cast(pl.Float64).alias("low"),
+                pl.col("Close").cast(pl.Float64).alias("close"),
+                pl.col("Volume").cast(pl.Float64).alias("volume"),
+                pl.col("Amount").cast(pl.Float64).alias("value"),
+                change_pct.alias("change_pct"),
+            )
+        )
         caps = rows.select(
             pl.lit(day).alias("day"),
             pl.col("Code").cast(pl.Utf8).alias("symbol"),

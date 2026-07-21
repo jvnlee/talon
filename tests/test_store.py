@@ -5,9 +5,11 @@ import polars as pl
 from conftest import make_candle, utc
 from talon.data.store import (
     DAILY_CANDLES,
+    DAILY_SNAPSHOT_SCHEMA,
     MINUTE_CANDLES,
     candles_to_frame,
     investor_records_to_frame,
+    normalize_daily_snapshot,
 )
 from talon.models import InvestorFlowRecord
 
@@ -105,3 +107,58 @@ def test_investor_frame_upsert_by_day(series):
     assert stored.height == 1
     assert stored.get_column("individual_buy").to_list() == [111.0]
     assert stored.get_column("updated_at").to_list() == [utc(2026, 7, 10, 9, 10)]
+
+
+def test_normalize_daily_snapshot_nulls_prices_on_no_trade_rows():
+    frame = pl.DataFrame(
+        {
+            "day": [date(2016, 9, 30)] * 4,
+            "symbol": ["TRADED", "HALTED", "GISE", "DEAD"],
+            "open": [100.0, 0.0, 0.0, 0.0],
+            "high": [110.0, 0.0, 0.0, 0.0],
+            "low": [90.0, 0.0, 0.0, 0.0],
+            "close": [105.0, 3270.0, 3760.0, 0.0],
+            "volume": [1000.0, 0.0, 0.0, 0.0],
+            "value": [105000.0, 0.0, 0.0, 0.0],
+            "change_pct": [1.5, 0.0, 14.81, 0.0],
+        },
+        schema=DAILY_SNAPSHOT_SCHEMA,
+    )
+
+    normalized = normalize_daily_snapshot(frame)
+
+    assert dict(normalized.schema) == DAILY_SNAPSHOT_SCHEMA
+    assert normalized.get_column("symbol").to_list() == ["TRADED", "HALTED", "GISE"]
+    traded = normalized.row(0, named=True)
+    assert (traded["open"], traded["high"], traded["low"]) == (100.0, 110.0, 90.0)
+    for row in normalized.tail(2).iter_rows(named=True):
+        assert row["open"] is None
+        assert row["high"] is None
+        assert row["low"] is None
+        assert row["volume"] == 0.0
+    assert normalized.row(2, named=True)["close"] == 3760.0
+    assert normalized.row(2, named=True)["change_pct"] == 14.81
+
+
+def test_normalize_daily_snapshot_nulls_prices_when_high_is_null():
+    frame = pl.DataFrame(
+        {
+            "day": [date(2016, 9, 30)],
+            "symbol": ["NULLHIGH"],
+            "open": [100.0],
+            "high": [None],
+            "low": [90.0],
+            "close": [105.0],
+            "volume": [10.0],
+            "value": [1050.0],
+            "change_pct": [None],
+        },
+        schema=DAILY_SNAPSHOT_SCHEMA,
+    )
+
+    normalized = normalize_daily_snapshot(frame)
+
+    row = normalized.row(0, named=True)
+    assert row["open"] is None
+    assert row["low"] is None
+    assert row["close"] == 105.0
