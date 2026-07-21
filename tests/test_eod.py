@@ -10,8 +10,12 @@ from talon.data.store import (
     DAILY_SNAPSHOT_SCHEMA,
     INDICATOR_DAILY,
     INVESTOR_TRADING,
+    MACRO_INTRADAY,
+    MACRO_INTRADAY_SCHEMA,
     MARKET_CAP,
     MINUTE_CANDLES,
+    VKOSPI_1D,
+    VKOSPI_1D_SCHEMA,
 )
 from talon.errors import SourceError
 from talon.ingest.eod import run_eod
@@ -211,6 +215,8 @@ def test_eod_passes_krx_login_to_pykrx(cfg, cal, state, snapshots, series, alert
         lambda snapshot, day, sample, **kw: CrosscheckResult(checked=len(sample)),
     )
     monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", set)
+    monkeypatch.setattr("talon.ingest.eod.daily_flows", lambda *a, **k: "up-to-date")
+    monkeypatch.setattr("talon.ingest.eod.daily_vkospi", lambda *a, **k: "up-to-date")
     write_stock_info(snapshots, [PREV_DAY], ["005930", "000660"])
     cfg = cfg.model_copy(update={"krx_id": "tester", "krx_password": "secret"})
 
@@ -390,3 +396,83 @@ def test_eod_kis_minutes_error_is_captured(
     summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
     assert summary.status == "ok"
     assert summary.steps["kis_minutes"] == "error: 분봉 실패"
+
+
+def test_eod_skips_vkospi_without_krx_login(
+    cfg, cal, state, snapshots, series, alerter, sources
+):
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["vkospi"] == "skipped-no-krx-login"
+
+
+def test_eod_records_vkospi_step(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    monkeypatch.setattr("talon.ingest.eod.daily_flows", lambda *a, **k: "up-to-date")
+    monkeypatch.setattr("talon.ingest.eod.daily_vkospi", lambda *a, **k: "1/1 days")
+    cfg = cfg.model_copy(update={"krx_id": "tester", "krx_password": "secret"})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["vkospi"] == "1/1 days"
+
+
+def test_eod_vkospi_error_is_captured(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    def boom(*a, **k):
+        raise SourceError("변동성지수 실패")
+
+    monkeypatch.setattr("talon.ingest.eod.daily_flows", lambda *a, **k: "up-to-date")
+    monkeypatch.setattr("talon.ingest.eod.daily_vkospi", boom)
+    cfg = cfg.model_copy(update={"krx_id": "tester", "krx_password": "secret"})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.status == "ok"
+    assert summary.steps["vkospi"] == "error: 변동성지수 실패"
+
+
+def test_eod_vkospi_appends_intraday_gap(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    monkeypatch.setattr("talon.ingest.eod.daily_flows", lambda *a, **k: "up-to-date")
+    monkeypatch.setattr("talon.ingest.eod.daily_vkospi", lambda *a, **k: "1/1 days")
+    series.upsert(
+        VKOSPI_1D,
+        "VKOSPI",
+        pl.DataFrame(
+            [
+                {
+                    "day": DAY,
+                    "open": 20.0,
+                    "high": 20.5,
+                    "low": 19.5,
+                    "close": 20.0,
+                    "change": 0.1,
+                    "change_pct": 0.5,
+                    "source": "krx",
+                    "fetched_at": utc(2026, 7, 10, 7, 0),
+                }
+            ],
+            schema=VKOSPI_1D_SCHEMA,
+        ),
+        key="day",
+    )
+    snapshots.write_date(
+        MACRO_INTRADAY,
+        DAY,
+        pl.DataFrame(
+            [
+                {
+                    "day": DAY,
+                    "slot": "15:35",
+                    "series": "VKOSPI",
+                    "captured_at": utc(2026, 7, 10, 6, 35),
+                    "price": 19.76,
+                    "prev_close": 19.9,
+                    "source": "krx",
+                }
+            ],
+            schema=MACRO_INTRADAY_SCHEMA,
+        ),
+    )
+    cfg = cfg.model_copy(update={"krx_id": "tester", "krx_password": "secret"})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["vkospi"] == "1/1 days d1535=0.24"

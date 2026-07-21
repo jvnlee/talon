@@ -190,6 +190,26 @@ class BackfillSummary(BaseModel):
     failed: list[str] = []
 
 
+class VkospiBackfillSummary(BaseModel):
+    status: str
+    sessions: int = 0
+    loaded: int = 0
+    skipped: int = 0
+    failed: list[str] = []
+    chain_violations: list[str] = []
+
+
+class VkospiStatusReport(BaseModel):
+    status: str
+    rows: int = 0
+    first_day: date | None = None
+    last_day: date | None = None
+    last_fetched_at: datetime | None = None
+    missing_sessions: list[str] = []
+    chain_violations: list[str] = []
+    range_violations: list[str] = []
+
+
 class KisMinutesBackfillSummary(BaseModel):
     status: str
     sessions: int = 0

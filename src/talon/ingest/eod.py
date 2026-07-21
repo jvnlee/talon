@@ -10,8 +10,10 @@ from talon.data.store import (
     DAILY_SNAPSHOT_SCHEMA,
     INDICATOR_DAILY,
     INVESTOR_TRADING,
+    MACRO_INTRADAY,
     MARKET_CAP,
     MINUTE_CANDLES,
+    VKOSPI_1D,
     DatePartitionedStore,
     ParquetStore,
     candles_to_frame,
@@ -21,6 +23,7 @@ from talon.errors import SourceError
 from talon.ingest.flows import daily_flows
 from talon.ingest.kis_minutes import daily_kis_minutes
 from talon.ingest.universe import candidate_symbols, rebuild_universe
+from talon.ingest.vkospi import VKOSPI_NAME, daily_vkospi
 from talon.markets.kr import KrxCalendar
 from talon.models import EodSummary
 from talon.notify.telegram import Alerter
@@ -108,6 +111,7 @@ def _run_eod_steps(
     _load_indicators(cfg, series, toss, steps)
     _load_investor_trading(cfg, series, toss, steps)
     _load_investor_flows(cfg, cal, snapshots, steps)
+    _load_vkospi(cfg, cal, series, snapshots, day, steps)
     _load_kis_minutes(cfg, cal, snapshots, steps)
     if source == "pykrx":
         _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
@@ -298,6 +302,63 @@ def _load_investor_flows(
     except Exception as exc:
         steps["flows"] = f"error: {exc}"
         log.warning("investor flows errors: %s", exc)
+
+
+def _load_vkospi(
+    cfg: TalonSettings,
+    cal: KrxCalendar,
+    series: ParquetStore,
+    snapshots: DatePartitionedStore,
+    day: date,
+    steps: dict[str, str],
+) -> None:
+    if not cfg.krx_login_configured:
+        steps["vkospi"] = "skipped-no-krx-login"
+        return
+    try:
+        result = daily_vkospi(cfg, series=series, cal=cal)
+    except Exception as exc:
+        steps["vkospi"] = f"error: {exc}"
+        log.warning("vkospi errors: %s", exc)
+        return
+    steps["vkospi"] = _annotate_vkospi_gap(result, series, snapshots, day)
+
+
+def _annotate_vkospi_gap(
+    result: str,
+    series: ParquetStore,
+    snapshots: DatePartitionedStore,
+    day: date,
+) -> str:
+    try:
+        gap = _vkospi_intraday_gap(series, snapshots, day)
+    except Exception as exc:
+        log.warning("vkospi intraday gap failed for %s: %s", day, exc)
+        return result
+    return f"{result} {gap}" if gap else result
+
+
+def _vkospi_intraday_gap(
+    series: ParquetStore,
+    snapshots: DatePartitionedStore,
+    day: date,
+) -> str | None:
+    daily = series.read(VKOSPI_1D, VKOSPI_NAME)
+    if daily is None:
+        return None
+    today = daily.filter(pl.col("day") == day)
+    if today.is_empty():
+        return None
+    close = today["close"].item()
+    macro = snapshots.read_date(MACRO_INTRADAY, day)
+    if macro is None:
+        return None
+    captured = macro.filter(pl.col("series") == VKOSPI_NAME)
+    for slot, tag in (("15:35", "d1535"), ("15:10", "d1510")):
+        row = captured.filter(pl.col("slot") == slot)
+        if not row.is_empty():
+            return f"{tag}={close - row['price'].item():.2f}"
+    return None
 
 
 def _load_kis_minutes(

@@ -28,6 +28,16 @@ class VkospiQuote(NamedTuple):
     price: float
     prev_close: float | None
 
+
+class VkospiDailyBar(NamedTuple):
+    day: date
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float
+    change: float | None
+    change_pct: float | None
+
 INDEX_SNAPSHOT_SCHEMA: dict[str, pl.DataType] = {
     "day": pl.Date(),
     "market": pl.Utf8(),
@@ -86,12 +96,12 @@ def fetch_index_snapshot(
     return frame.filter(pl.col("close") > 0)
 
 
-def fetch_vkospi(
+def _fetch_vkospi_rows(
     day: date,
     *,
-    credentials: KrxCredentials | None = None,
-    sleep: Callable[[float], None] = time.sleep,
-) -> VkospiQuote:
+    credentials: KrxCredentials | None,
+    sleep: Callable[[float], None],
+) -> list[dict[str, Any]]:
     _load_pykrx(credentials)
     from pykrx.website.comm.webio import get_session
 
@@ -118,22 +128,71 @@ def fetch_vkospi(
         return response.json()
 
     body = _retry(request, sleep=sleep)
-    rows = body.get("output", []) if isinstance(body, dict) else []
+    return body.get("output", []) if isinstance(body, dict) else []
+
+
+def fetch_vkospi(
+    day: date,
+    *,
+    credentials: KrxCredentials | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> VkospiQuote:
+    rows = _fetch_vkospi_rows(day, credentials=credentials, sleep=sleep)
     return parse_vkospi_rows(rows)
 
 
-def parse_vkospi_rows(rows: list[dict[str, Any]]) -> VkospiQuote:
+def fetch_vkospi_daily(
+    day: date,
+    *,
+    credentials: KrxCredentials | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> VkospiDailyBar:
+    rows = _fetch_vkospi_rows(day, credentials=credentials, sleep=sleep)
+    return parse_vkospi_daily_row(rows, day)
+
+
+def _vkospi_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
     row = next((r for r in rows if r.get("IDX_NM") == VKOSPI_INDEX_NAME), None)
     if row is None:
         raise SourceError(
             f"KRX 파생지수 응답에 {VKOSPI_INDEX_NAME}가 없습니다 (분류 변경 의심)"
         )
+    return row
+
+
+def _vkospi_close(row: dict[str, Any]) -> float:
     price = _parse_index_number(row.get("CLSPRC_IDX"))
     if price is None:
         raise SourceError("KRX 변동성지수 값이 비어 있습니다 (휴장이거나 아직 산출 전)")
     low, high = VKOSPI_SANE_RANGE
     if not low <= price <= high:
         raise SourceError(f"VKOSPI 값 {price}가 정상 범위({low}~{high}) 밖입니다")
+    return price
+
+
+def parse_vkospi_daily_row(rows: list[dict[str, Any]], day: date) -> VkospiDailyBar:
+    row = _vkospi_row(rows)
+    close = _vkospi_close(row)
+    open_ = _parse_index_number(row.get("OPNPRC_IDX"))
+    high = _parse_index_number(row.get("HGPRC_IDX"))
+    low = _parse_index_number(row.get("LWPRC_IDX"))
+    change = _parse_index_number(row.get("CMPPREVDD_IDX"))
+    change_pct = _parse_index_number(row.get("FLUC_RT"))
+    if (
+        open_ is not None
+        and high is not None
+        and low is not None
+        and (low > min(open_, close) or high < max(open_, close))
+    ):
+        raise SourceError(
+            f"VKOSPI OHLC 정합 위반 {day}: O={open_} H={high} L={low} C={close}"
+        )
+    return VkospiDailyBar(day, open_, high, low, close, change, change_pct)
+
+
+def parse_vkospi_rows(rows: list[dict[str, Any]]) -> VkospiQuote:
+    row = _vkospi_row(rows)
+    price = _vkospi_close(row)
     change = _parse_index_number(row.get("CMPPREVDD_IDX"))
     prev_close = round(price - change, 4) if change is not None else None
     return VkospiQuote(price, prev_close)

@@ -41,6 +41,7 @@ INDICATOR_DAILY = "indicators_1d"
 INDEX_DAILY = "index_1d"
 INVESTOR_TRADING = "investor_trading"
 INVESTOR_FLOWS = "investor_flows_1d"
+VKOSPI_1D = "vkospi_1d"
 KIS_MINUTES = "kis_minutes_1m"
 STOCK_INFO = "stock_info"
 DELISTING = "delisting"
@@ -453,6 +454,18 @@ INVESTOR_FLOWS_SCHEMA: dict[str, pl.DataType] = {
     "sell_value": pl.Float64(),
     "buy_value": pl.Float64(),
     "net_value": pl.Float64(),
+}
+
+VKOSPI_1D_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "open": pl.Float64(),
+    "high": pl.Float64(),
+    "low": pl.Float64(),
+    "close": pl.Float64(),
+    "change": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "source": pl.Utf8(),
+    "fetched_at": pl.Datetime("us", "UTC"),
 }
 
 KIS_MINUTES_SCHEMA: dict[str, pl.DataType] = {
