@@ -26,6 +26,7 @@ RATE_LIMIT_CODES = {"EGW00201"}
 TOKEN_EXPIRED_CODES = {"EGW00123"}
 TOKEN_THROTTLED_CODES = {"EGW00133"}
 MAX_ATTEMPTS = 3
+STALE_TOKEN_ATTEMPTS = 8
 PACER_CLAMP_SECONDS = 60.0
 
 
@@ -127,6 +128,7 @@ class KisClient:
         self._pacer = pacer
         self._last_call: float | None = None
         self._token: str | None = None
+        self._token_expired_at: datetime | None = None
         self._token_lock = threading.Lock()
         self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
 
@@ -141,18 +143,27 @@ class KisClient:
 
     def token(self) -> str:
         token = self._token
-        if token is not None:
+        if token is not None and not self._is_stale():
             return token
         with self._token_lock:
-            if self._token is not None:
+            if self._token is not None and not self._is_stale():
                 return self._token
             cached = self._read_cached_token()
             if cached is not None:
-                self._token = cached
-                return cached
-            return self._issue_token()
+                self._token, self._token_expired_at = cached
+                return self._token
+            stale = self._token
+            self._token = None
+            self._token_expired_at = None
+            return self._issue_token(stale=stale)
 
-    def _read_cached_token(self) -> str | None:
+    def _is_stale(self) -> bool:
+        expired_at = self._token_expired_at
+        if expired_at is None:
+            return True
+        return self._now() >= expired_at - TOKEN_EXPIRY_MARGIN
+
+    def _read_cached_token(self) -> tuple[str, datetime] | None:
         if not self._token_path.exists():
             return None
         try:
@@ -169,44 +180,57 @@ class KisClient:
             return None
         if self._now() >= expired_at - TOKEN_EXPIRY_MARGIN:
             return None
-        return str(token)
+        return str(token), expired_at
 
-    def _issue_token(self) -> str:
+    def _issue_token(self, stale: str | None = None) -> str:
         body = {
             "grant_type": "client_credentials",
             "appkey": self._app_key,
             "appsecret": self._app_secret,
         }
-        for attempt in range(MAX_ATTEMPTS):
+        for _ in range(STALE_TOKEN_ATTEMPTS):
             response = self._client.post(TOKEN_URL, json=body)
             payload = self._payload(response)
             token = payload.get("access_token")
             if token:
-                self._token = str(token)
-                self._write_token_cache(str(token), payload)
-                return self._token
+                token = str(token)
+                if stale is not None and token == stale:
+                    self._sleep(TOKEN_RETRY_WAIT)
+                    continue
+                self._store_token(token, payload)
+                return token
             error_code = str(payload.get("error_code") or "")
-            if error_code in TOKEN_THROTTLED_CODES and attempt < MAX_ATTEMPTS - 1:
+            if error_code in TOKEN_THROTTLED_CODES:
                 self._sleep(TOKEN_RETRY_WAIT)
                 continue
             raise SourceError(
                 f"KIS 토큰 발급 실패: {error_code} {payload.get('error_description', '')}"
             )
-        raise SourceError("KIS 토큰 발급 실패: 재시도 소진")
+        raise SourceError("KIS 토큰 발급 실패: 재발급이 이전 토큰만 반환")
 
-    def _write_token_cache(self, token: str, payload: dict[str, Any]) -> None:
+    def _store_token(self, token: str, payload: dict[str, Any]) -> None:
+        expired_at = self._expiry_from_payload(payload)
+        self._token = token
+        self._token_expired_at = expired_at
+        self._write_token_cache(token, expired_at)
+
+    def _expiry_from_payload(self, payload: dict[str, Any]) -> datetime:
         expired_at_text = payload.get("access_token_token_expired")
         if isinstance(expired_at_text, str):
-            expired_at = expired_at_text
-        else:
-            expires_in = float(payload.get("expires_in") or 0)
-            expired_at = (self._now() + timedelta(seconds=expires_in)).isoformat(sep=" ")
+            try:
+                return datetime.fromisoformat(expired_at_text)
+            except ValueError:
+                pass
+        expires_in = float(payload.get("expires_in") or 0)
+        return self._now() + timedelta(seconds=expires_in)
+
+    def _write_token_cache(self, token: str, expired_at: datetime) -> None:
         self._token_path.parent.mkdir(parents=True, exist_ok=True)
         self._token_path.write_text(
             json.dumps(
                 {
                     "access_token": token,
-                    "expired_at": expired_at,
+                    "expired_at": expired_at.isoformat(sep=" "),
                     "issued_at": self._now().isoformat(timespec="seconds"),
                 }
             )
@@ -217,7 +241,8 @@ class KisClient:
         with self._token_lock:
             if self._token == stale:
                 self._token = None
-                self._issue_token()
+                self._token_expired_at = None
+                self._issue_token(stale=stale)
 
     def _throttle(self) -> None:
         if self._pacer is not None:
@@ -278,6 +303,7 @@ class KisClient:
             if msg_cd in TOKEN_EXPIRED_CODES and attempt < MAX_ATTEMPTS - 1:
                 last_error = f"{msg_cd} {msg}"
                 self._refresh_token(token)
+                self._sleep(1.0 * (attempt + 1))
                 continue
             raise SourceError(f"KIS 응답 오류: {msg_cd} {msg} (tr_id={tr_id})")
         raise SourceError(f"KIS 요청 재시도 소진 (tr_id={tr_id}): {last_error}")
@@ -287,9 +313,7 @@ class KisClient:
         try:
             return dict(response.json())
         except (json.JSONDecodeError, ValueError) as exc:
-            raise SourceError(
-                f"KIS 응답이 JSON이 아닙니다 (HTTP {response.status_code})"
-            ) from exc
+            raise SourceError(f"KIS 응답이 JSON이 아닙니다 (HTTP {response.status_code})") from exc
 
 
 def build_kis_client(cfg: "TalonSettings") -> KisClient:

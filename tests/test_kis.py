@@ -5,11 +5,22 @@ import httpx
 import pytest
 
 from talon.errors import SourceError
-from talon.sources.kis import KisClient, RatePacer
+from talon.sources.kis import STALE_TOKEN_ATTEMPTS, KisClient, RatePacer
 
 NOW = datetime(2026, 7, 15, 12, 0, 0)
 VALID_EXPIRY = "2026-07-16 11:59:59"
 STALE_EXPIRY = "2026-07-15 12:05:00"
+
+
+def token_response(token, expiry=VALID_EXPIRY):
+    return httpx.Response(
+        200,
+        json={
+            "access_token": token,
+            "expires_in": 86400,
+            "access_token_token_expired": expiry,
+        },
+    )
 
 
 class Recorder:
@@ -122,6 +133,84 @@ def test_expired_token_mid_session_is_refreshed(tmp_path):
 
     assert payload["output"]["ok"] == "1"
     assert recorder.token_calls == 2
+
+
+def test_proactive_refresh_at_margin_boundary(tmp_path):
+    recorder = Recorder()
+    now_holder = {"t": datetime(2026, 7, 15, 12, 0, 0)}
+    client = KisClient(
+        "key",
+        "secret",
+        base_url="https://kis.test",
+        token_path=tmp_path / "kis_token.json",
+        transport=httpx.MockTransport(recorder.handler),
+        sleep=lambda _: None,
+        now=lambda: now_holder["t"],
+    )
+    client.get("/quote", "TR1", {})
+    assert recorder.token_calls == 1
+    now_holder["t"] = datetime(2026, 7, 16, 11, 55, 0)
+    client.get("/quote", "TR1", {})
+    assert recorder.token_calls == 2
+    client.close()
+
+
+def test_stale_token_reissue_bridges_same_token(tmp_path):
+    slept = []
+    recorder = Recorder(
+        quote_responses=[
+            httpx.Response(200, json={"rt_cd": "1", "msg_cd": "EGW00123", "msg1": "토큰 만료"}),
+            httpx.Response(200, json={"rt_cd": "0", "output": {"ok": "1"}}),
+        ],
+        token_responses=[
+            token_response("same"),
+            token_response("same"),
+            token_response("same"),
+            token_response("same"),
+            token_response("fresh"),
+        ],
+    )
+    with make_client(tmp_path, recorder, slept=slept) as client:
+        payload = client.get("/quote", "TR1", {})
+
+    assert payload["output"]["ok"] == "1"
+    assert recorder.token_calls == 5
+    assert slept.count(60.0) == 3
+    assert 1.0 in slept
+
+
+def test_stale_token_reissue_exhaustion_raises(tmp_path):
+    slept = []
+    recorder = Recorder(
+        quote_responses=[
+            httpx.Response(200, json={"rt_cd": "1", "msg_cd": "EGW00123", "msg1": "토큰 만료"})
+        ],
+        token_responses=[token_response("same") for _ in range(1 + STALE_TOKEN_ATTEMPTS)],
+    )
+    with (
+        make_client(tmp_path, recorder, slept=slept) as client,
+        pytest.raises(SourceError, match="재발급"),
+    ):
+        client.get("/quote", "TR1", {})
+
+    assert recorder.token_calls == 1 + STALE_TOKEN_ATTEMPTS
+    assert slept.count(60.0) == STALE_TOKEN_ATTEMPTS
+
+
+def test_expired_token_retry_backs_off(tmp_path):
+    slept = []
+    recorder = Recorder(
+        quote_responses=[
+            httpx.Response(200, json={"rt_cd": "1", "msg_cd": "EGW00123", "msg1": "토큰 만료"}),
+            httpx.Response(200, json={"rt_cd": "0", "output": {"ok": "1"}}),
+        ]
+    )
+    with make_client(tmp_path, recorder, slept=slept) as client:
+        payload = client.get("/quote", "TR1", {})
+
+    assert payload["output"]["ok"] == "1"
+    assert recorder.token_calls == 2
+    assert 1.0 in slept
 
 
 def test_server_error_is_retried(tmp_path):
