@@ -200,13 +200,21 @@ class _Run:
             {"day": day, "symbol": order.symbol, "kind": order.kind, "reason": reason}
         )
 
+    @staticmethod
+    def _halted(bar: dict[str, Any]) -> bool:
+        return bar["open"] is None
+
     def _limit_up(self, bar: dict[str, Any]) -> bool:
         prev = bar["prev_close"]
-        return prev is not None and bar["open"] >= prev * (1 + self.config.limit_move_pct)
+        if prev is None or self._halted(bar):
+            return False
+        return bar["open"] >= prev * (1 + self.config.limit_move_pct)
 
     def _limit_down(self, bar: dict[str, Any]) -> bool:
         prev = bar["prev_close"]
-        return prev is not None and bar["open"] <= prev * (1 - self.config.limit_move_pct)
+        if prev is None or self._halted(bar):
+            return False
+        return bar["open"] <= prev * (1 - self.config.limit_move_pct)
 
     def _apply_updates(self, day: date) -> None:
         for order in self.pending:
@@ -233,6 +241,9 @@ class _Run:
             if bar is None:
                 self._reject(day, order, "no-bar")
                 continue
+            if self._halted(bar):
+                self._reject(day, order, "halted")
+                continue
             if self._limit_down(bar):
                 self._reject(day, order, "limit-down")
                 continue
@@ -242,13 +253,13 @@ class _Run:
             if not position.exit_next_open:
                 continue
             bar = bars.get(symbol)
-            if bar is None or self._limit_down(bar):
+            if bar is None or self._halted(bar) or self._limit_down(bar):
                 continue
             self._close(position, day, bar["open"] * (1 - self.config.slippage_pct), "overnight")
         for symbol in sorted(self.positions):
             position = self.positions[symbol]
             bar = bars.get(symbol)
-            if bar is None or self._limit_down(bar):
+            if bar is None or self._halted(bar) or self._limit_down(bar):
                 continue
             exec_price = bar["open"] * (1 - self.config.slippage_pct)
             if position.stop is not None and bar["open"] <= position.stop:
@@ -266,6 +277,9 @@ class _Run:
             bar = bars.get(order.symbol)
             if bar is None:
                 self._reject(day, order, "no-bar")
+                continue
+            if self._halted(bar):
+                self._reject(day, order, "halted")
                 continue
             if self._limit_up(bar):
                 self._reject(day, order, "limit-up")
@@ -365,7 +379,7 @@ class _Run:
         for symbol in sorted(self.positions):
             position = self.positions[symbol]
             bar = bars.get(symbol)
-            if bar is None or self._limit_down(bar):
+            if bar is None or self._halted(bar) or self._limit_down(bar):
                 continue
             if position.stop is not None and bar["low"] <= position.stop:
                 self._close(position, day, position.stop * (1 - self.config.slippage_pct), "stop")

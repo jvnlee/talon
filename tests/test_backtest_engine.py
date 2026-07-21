@@ -583,3 +583,107 @@ def test_close_notifies_strategy_with_trade_event():
     assert event.pnl == pytest.approx(trade["pnl"])
     assert event.return_pct == pytest.approx(trade["return_pct"])
     assert event.reason == "strategy"
+
+
+def halted_bar(day, symbol, close, factor=1.0):
+    return {
+        "day": day,
+        "symbol": symbol,
+        "open": None,
+        "high": None,
+        "low": None,
+        "close": float(close),
+        "volume": 0.0,
+        "value": 0.0,
+        "raw_close": float(close) / factor,
+        "factor": float(factor),
+    }
+
+
+def test_buy_on_halted_day_is_rejected():
+    panel = build_panel(
+        [bar(d(0), "AAA", 100), halted_bar(d(1), "AAA", 100), bar(d(2), "AAA", 100)]
+    )
+    strategy = ScriptedStrategy({d(0): [Order("buy", "AAA", budget=1_000_000)]})
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    rejection = result.rejections.row(0, named=True)
+    assert rejection["day"] == d(1)
+    assert rejection["reason"] == "halted"
+    assert result.trades.is_empty()
+    assert result.stats.open_positions == 0
+
+
+def test_sell_on_halted_day_is_rejected_and_position_survives():
+    panel = build_panel(
+        [
+            bar(d(0), "AAA", 100),
+            bar(d(1), "AAA", 100),
+            bar(d(2), "AAA", 100),
+            halted_bar(d(3), "AAA", 100),
+            bar(d(4), "AAA", 100),
+        ]
+    )
+    strategy = ScriptedStrategy(
+        {
+            d(0): [Order("buy", "AAA", budget=1_000_000)],
+            d(2): [Order("sell", "AAA")],
+            d(3): [Order("sell", "AAA")],
+        }
+    )
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    halted = result.rejections.filter(pl.col("reason") == "halted").row(0, named=True)
+    assert halted["day"] == d(3)
+    assert halted["kind"] == "sell"
+    trade = result.trades.row(0, named=True)
+    assert trade["exit_day"] == d(4)
+    assert trade["reason"] == "strategy"
+
+
+def test_halted_day_defers_intrabar_exits_and_marks_at_official_close():
+    panel = build_panel(
+        [
+            bar(d(0), "AAA", 100),
+            bar(d(1), "AAA", 100),
+            halted_bar(d(2), "AAA", 120),
+            bar(d(3), "AAA", 120),
+            bar(d(4), "AAA", 120),
+        ]
+    )
+    strategy = ScriptedStrategy({d(0): [Order("buy", "AAA", budget=1_000_000, target=110.0)]})
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    shares = 10_000
+    halted_equity = result.equity.filter(pl.col("day") == d(2)).row(0, named=True)
+    assert halted_equity["position_value"] == pytest.approx(shares * 120)
+    trade = result.trades.row(0, named=True)
+    assert trade["exit_day"] == d(3)
+    assert trade["reason"] == "target"
+    assert trade["exit_price"] == pytest.approx(120.0)
+
+
+def test_overnight_exit_skips_halted_day_and_fills_next_open():
+    panel = build_panel(
+        [
+            bar(d(0), "AAA", 100),
+            bar(d(1), "AAA", 100),
+            halted_bar(d(2), "AAA", 120),
+            bar(d(3), "AAA", 120),
+            bar(d(4), "AAA", 120),
+        ]
+    )
+    strategy = ScriptedStrategy(
+        {d(1): [Order("buy", "AAA", budget=1_000_000, fill_at="close", exit_next_open=True)]}
+    )
+
+    result = run_backtest(panel, strategy, config=NO_SLIP, costs=ZeroCost())
+
+    trade = result.trades.row(0, named=True)
+    assert trade["entry_day"] == d(1)
+    assert trade["exit_day"] == d(3)
+    assert trade["reason"] == "overnight"
+    assert trade["exit_price"] == pytest.approx(120.0)
