@@ -730,6 +730,9 @@ def shorting_verify(start_text: str | None, end_text: str | None) -> None:
         sys.exit(1)
 
 
+_ACTIONS_PART_CHOICE = click.Choice(list(ALL_PARTS))
+
+
 @main.group()
 def actions() -> None:
     """KRX 시장조치 이력 (VI·시장경보·공매도과열·거래정지)."""
