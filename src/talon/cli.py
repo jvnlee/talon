@@ -50,6 +50,13 @@ from talon.data.store import (
 from talon.data.uskrmap import build_us_kr_map
 from talon.errors import TalonError
 from talon.factors.engine import warmup_periods
+from talon.ingest.actions import (
+    ALL_PARTS,
+    BACKFILL_PARTS,
+    backfill_actions,
+    daily_actions,
+    verify_actions,
+)
 from talon.ingest.briefing import run_briefing_snapshot
 from talon.ingest.close_auction import run_close_auction
 from talon.ingest.collect import bootstrap_universe, run_collect
@@ -721,6 +728,77 @@ def shorting_verify(start_text: str | None, end_text: str | None) -> None:
     click.echo(report.model_dump_json(indent=2))
     if report.status != "ok":
         sys.exit(1)
+
+
+@main.group()
+def actions() -> None:
+    """KRX 시장조치 이력 (VI·시장경보·공매도과열·거래정지)."""
+
+
+@actions.command("backfill")
+@click.option("--start", "start_text", default="2016-01-01", show_default=True, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--part", "parts", multiple=True, type=_ACTIONS_PART_CHOICE)
+def actions_backfill(start_text: str, end_text: str | None, parts: tuple[str, ...]) -> None:
+    cfg = load_settings()
+    if not cfg.krx_login_configured:
+        raise click.ClickException("TALON_KRX_ID / TALON_KRX_PASSWORD 설정이 필요합니다")
+    with job_lock(cfg.locks_dir / "actions-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("actions backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            start = date.fromisoformat(start_text)
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if end < start:
+                raise click.ClickException("종료일이 시작일보다 빠릅니다")
+            selected = parts or BACKFILL_PARTS
+
+            def report(index: int, total: int, day: date) -> None:
+                if index % 12 == 0 or index == total:
+                    click.echo(f"{index}/{total} {day}")
+
+            summary = backfill_actions(
+                cfg,
+                cal=rt.cal,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                start=start,
+                end=end,
+                parts=selected,
+                progress=report,
+            )
+    click.echo(summary.model_dump_json())
+
+
+@actions.command("daily")
+@click.option("--part", "parts", multiple=True, type=_ACTIONS_PART_CHOICE)
+def actions_daily(parts: tuple[str, ...]) -> None:
+    cfg = load_settings()
+    if not cfg.krx_login_configured:
+        raise click.ClickException("TALON_KRX_ID / TALON_KRX_PASSWORD 설정이 필요합니다")
+    with job_lock(cfg.locks_dir / "actions-daily.lock") as acquired:
+        if not acquired:
+            click.echo("actions daily가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = daily_actions(
+                cfg, cal=rt.cal, snapshots=rt.snapshots, parts=parts or ALL_PARTS
+            )
+    click.echo(summary.model_dump_json())
+
+
+@actions.command("verify")
+@click.option("--part", "parts", multiple=True, type=_ACTIONS_PART_CHOICE)
+def actions_verify(parts: tuple[str, ...]) -> None:
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        report = verify_actions(cfg, snapshots=rt.snapshots, parts=parts or ALL_PARTS)
+    click.echo(report.model_dump_json(indent=2))
 
 
 @main.group("kis-minutes")
