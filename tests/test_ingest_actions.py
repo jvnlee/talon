@@ -286,6 +286,25 @@ def test_daily_alerts_writes_snapshot(cfg, cal, snapshots):
     assert stored.row(0, named=True)["level"] == "warning"
 
 
+def test_daily_alerts_skips_today_before_ready(cfg, cal, snapshots):
+    end = cal.latest_trading_day(TODAY)
+    assert end == TODAY
+
+    def fake_alerts(day: date) -> pl.DataFrame:
+        return alerts_frame(day, [("warning", "066910")])
+
+    summary = daily_actions(
+        cfg,
+        cal=cal,
+        snapshots=snapshots,
+        now=at(15, 0),
+        parts=("alerts",),
+        fetchers=fetchers(alerts=fake_alerts),
+    )
+    assert summary.parts["alerts"] == "not-ready"
+    assert not snapshots.has_date(MARKET_ALERTS, end)
+
+
 def test_daily_halts_captures_and_fills_resume(cfg, cal, snapshots):
     d1 = date(2026, 7, 6)
     snapshots.write_date(TRADING_HALTS, d1, halts_frame([(d1, "083660", "KR7083660001", None)]))

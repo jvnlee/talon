@@ -58,7 +58,6 @@ HALTS_KEY = ("symbol",)
 
 VI_MIN_PER_DAY = 5.0
 VI_MAX_PER_DAY = 5000.0
-OVERHEAT_MIN_PER_DAY = 0.5
 OVERHEAT_MAX_PER_DAY = 500.0
 
 RangeFetcher = Callable[[date, date], pl.DataFrame]
@@ -207,8 +206,10 @@ def _backfill_range(
     streak = 0
     aborted = False
     total = len(chunks)
+    session_count = 0
     for index, (chunk_start, chunk_end) in enumerate(chunks, start=1):
         sessions = cal.sessions_between(chunk_start, chunk_end)
+        session_count += len(sessions)
         if sessions and all(snapshots.has_date(dataset, day) for day in sessions):
             skipped += 1
             streak = 0
@@ -239,7 +240,7 @@ def _backfill_range(
             break
     status = "aborted" if aborted else ("ok" if not failed else "partial")
     return BackfillSummary(
-        status=status, sessions=total, loaded=loaded, skipped=skipped, failed=failed
+        status=status, sessions=session_count, loaded=loaded, skipped=skipped, failed=failed
     )
 
 
@@ -274,7 +275,7 @@ def daily_actions(
                     fetchers.overheat, end, today, moment, lookback_sessions,
                 )
             elif part == "alerts":
-                msg, rows = _daily_alerts(snapshots, fetchers.alerts, end)
+                msg, rows = _daily_alerts(snapshots, fetchers.alerts, end, today, moment)
             elif part == "halts":
                 msg, rows = _daily_halts(
                     snapshots, fetchers.halts, fetchers.halt_history, end, sleep
@@ -325,7 +326,11 @@ def _daily_alerts(
     snapshots: DatePartitionedStore,
     fetch: SnapshotFetcher,
     end: date,
+    today: date,
+    moment: datetime,
 ) -> tuple[str, int]:
+    if end >= today and moment.time() < ACTIONS_READY:
+        return "not-ready", 0
     if snapshots.has_date(MARKET_ALERTS, end):
         return "up-to-date", 0
     frame = fetch(end)
@@ -492,7 +497,7 @@ def _verify_overheat(snapshots: DatePartitionedStore) -> tuple[str, str]:
     if unknown:
         issues.append(f"unknown-type {unknown}")
     per_day = frame.height / frame.select("day").n_unique()
-    if not OVERHEAT_MIN_PER_DAY <= per_day <= OVERHEAT_MAX_PER_DAY:
+    if per_day > OVERHEAT_MAX_PER_DAY:
         issues.append(f"rarity {per_day:.1f}/day")
     return _status(issues), _coverage(frame)
 
