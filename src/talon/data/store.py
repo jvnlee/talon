@@ -42,6 +42,9 @@ INDEX_DAILY = "index_1d"
 INVESTOR_TRADING = "investor_trading"
 INVESTOR_FLOWS = "investor_flows_1d"
 VKOSPI_1D = "vkospi_1d"
+SHORTING = "shorting_1d"
+SHORTING_BALANCE = "shorting_balance_1d"
+SHORTING_INVESTOR = "shorting_investor_1d"
 KIS_MINUTES = "kis_minutes_1m"
 STOCK_INFO = "stock_info"
 DELISTING = "delisting"
@@ -465,6 +468,40 @@ VKOSPI_1D_SCHEMA: dict[str, pl.DataType] = {
     "change": pl.Float64(),
     "change_pct": pl.Float64(),
     "source": pl.Utf8(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+SHORTING_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "market": pl.Utf8(),
+    "short_volume": pl.Int64(),
+    "total_volume_consolidated": pl.Int64(),
+    "short_ratio_pct": pl.Float64(),
+    "short_value": pl.Int64(),
+    "total_value_consolidated": pl.Int64(),
+    "short_value_ratio_pct": pl.Float64(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+SHORTING_BALANCE_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "market": pl.Utf8(),
+    "short_balance_qty": pl.Int64(),
+    "listed_shares": pl.Int64(),
+    "short_balance_value": pl.Int64(),
+    "market_cap": pl.Int64(),
+    "short_balance_ratio_pct": pl.Float64(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+SHORTING_INVESTOR_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "market": pl.Utf8(),
+    "investor": pl.Utf8(),
+    "vol_shares": pl.Int64(),
+    "value_krw": pl.Int64(),
     "fetched_at": pl.Datetime("us", "UTC"),
 }
 

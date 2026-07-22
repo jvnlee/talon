@@ -244,6 +244,24 @@ class KisMinutesVerifyReport(BaseModel):
     examples: list[str] = []
 
 
+class ShortingVerifyReport(BaseModel):
+    status: str
+    trade_days: int = 0
+    trade_rows: int = 0
+    ratio_violations: int = 0
+    candle_checked: int = 0
+    candle_alerts: int = 0
+    balance_days: int = 0
+    balance_rows: int = 0
+    balance_violations: int = 0
+    investor_days: int = 0
+    investor_rows: int = 0
+    investor_total_mismatches: int = 0
+    ban_window_days: int = 0
+    ban_zero_days: int = 0
+    examples: list[str] = []
+
+
 class ReconcileDay(BaseModel):
     day: date
     status: str
