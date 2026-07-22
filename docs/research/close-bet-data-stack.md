@@ -245,7 +245,7 @@
 
 1. **종목별 확정 수급 11분류(2016~)** — ~~pykrx detail=True. ~4,500종목×금액·수량 루프~~ **[구현 완료 2026-07-18]** 실측 결과 일별 크로스섹션 축(MDCSTAT02401, 11콜/일)이 종목별 루프를 압승 — `talon flows backfill` + eod 전방 수집. 스펙: `krx-investor-flows.md`.
 2. **overnight/intraday 수익률 분해·신고가·상하한가** — 보유 candles_1d(2016~)에서 결정론적 계산. **[구현 완료 2026-07-18]** 패널 파생 컬럼 + `talon limits` 검증(규칙 의심 0건/579만 행). 신고가는 팩터 표현식으로 해결. 스펙: `krx-investor-flows.md` §7.
-3. **공매도 거래·잔고(2016~)** — pykrx get_shorting_*. 난이도 하, 무료.
+3. **공매도 거래·잔고(2016~)** — ~~pykrx get_shorting_*. 난이도 하, 무료.~~ **[구현 완료 2026-07-22]** 데이터셋 3종(`shorting_1d` 종목별 거래 2016~, `shorting_balance_1d` 종목별 잔고 2016-06-30~ 제도 시행, `shorting_investor_1d` 시장·투자자별 2017-05-22~) + `talon shorting {backfill,daily,verify}` + eod 전방 스텝. 실측 함정: 거래 `비중` 분모는 연결(KRX+NXT) 총거래량이라 candles_1d와 불일치(KRX 정본 저장), 잔고 관측 지연 T+3 세션, 금지기간에도 MM/LP 잔여 공매도 존재(near-zero 검증 금지). 스펙: `krx-shorting.md`.
 4. **VI 발동 이력(2014~15~)·시장경보·공매도과열(2017~)·거래정지** — KRX MDCSTAT224/KIND 크롤링. 난이도 하~중, 무료.
 5. **프로그램매매 종목별 일별** — data.krx.co.kr 커스텀 스크래핑(pykrx 미지원). 이력 시작 시점 미확인. 난이도 중, 무료.
 6. **신용융자 잔고(종목별)** — KOFIA FreeSIS(pykrx 미지원). 난이도 중, 무료.
