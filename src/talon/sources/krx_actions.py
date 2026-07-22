@@ -45,7 +45,7 @@ ALERT_SCREEN_URLS = {
 OVERHEAT_BLD = "dbms/MDC/STAT/srt/MDCSTAT30901"
 OVERHEAT_DATA_KEY = "OutBlock_1"
 OVERHEAT_SCREEN_URL = "https://data.krx.co.kr/contents/MDC/STAT/srt/MDCSTAT309.jsp"
-OVERHEAT_DTEC_TYPES = ("유형2", "유형3", "연장")
+OVERHEAT_DTEC_TYPES = ("유형1", "유형2", "유형3", "유형4", "연장")
 
 HALTS_SNAPSHOT_BLD = "dbms/MDC/STAT/issue/MDCSTAT21201"
 HALTS_HISTORY_BLD = "dbms/MDC/STAT/issue/MDCSTAT21301"

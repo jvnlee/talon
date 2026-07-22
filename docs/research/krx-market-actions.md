@@ -80,7 +80,7 @@ VI만 미완결인데 마감 후엔 남지 않음). 15:10 판단에는 항상 T-
 필드: `BAS_DD→day`(적출일 T-1), `MKTACT_APPL_DD→restrict_apply_dd`(금지적용일 T=익영업일),
 `RELEAS_DD→release_dd`, `ISU_CD→symbol`, `ISU_CD_FULL→isin`, `ISU_ABBRV→name`, `MKT_NM→market`,
 `MKT_ID→mkt_id`, `VALU_PD_TR_DYS`, `TDD_SRTSELL_WT`, `PRC_YD`(부호 있음), `TDD_SRTSELL_TRDVAL_INCDEC_RT`,
-`VALU_PD_AVG_SRTSELL_WT`, `SRTSELL_IMPSBL_DTEC_TP_NM→dtec_type`(유형2/유형3/연장).
+`VALU_PD_AVG_SRTSELL_WT`, `SRTSELL_IMPSBL_DTEC_TP_NM→dtec_type`(유형1/유형2/유형3/유형4/연장 — 2017~2026 백필 전수 실측 5종, 프로브 표본은 유형2·3·연장만 봤으나 실데이터에 유형1 593건·유형4 289건 존재).
 
 룩어헤드(정합): **적출일 BAS_DD=T-1 → 금지 APPL_DD=T.** 전일 종가 후 공표되어 당일 개장 전 확정 →
 15:10 T-1 규율과 정합(지표는 BAS_DD 시점값, APPL_DD 이전). 파티션은 BAS_DD 기준.
