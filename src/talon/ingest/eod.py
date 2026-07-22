@@ -22,6 +22,7 @@ from talon.data.store import (
 from talon.errors import SourceError
 from talon.ingest.flows import daily_flows
 from talon.ingest.kis_minutes import daily_kis_minutes
+from talon.ingest.shorting import daily_shorting
 from talon.ingest.universe import candidate_symbols, rebuild_universe
 from talon.ingest.vkospi import VKOSPI_NAME, daily_vkospi
 from talon.markets.kr import KrxCalendar
@@ -112,6 +113,7 @@ def _run_eod_steps(
     _load_investor_trading(cfg, series, toss, steps)
     _load_investor_flows(cfg, cal, snapshots, steps)
     _load_vkospi(cfg, cal, series, snapshots, day, steps)
+    _load_shorting(cfg, cal, snapshots, steps)
     _load_kis_minutes(cfg, cal, snapshots, steps)
     if source == "pykrx":
         _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
@@ -359,6 +361,22 @@ def _vkospi_intraday_gap(
         if not row.is_empty():
             return f"{tag}={close - row['price'].item():.2f}"
     return None
+
+
+def _load_shorting(
+    cfg: TalonSettings,
+    cal: KrxCalendar,
+    snapshots: DatePartitionedStore,
+    steps: dict[str, str],
+) -> None:
+    if not cfg.krx_login_configured:
+        steps["shorting"] = "skipped-no-krx-login"
+        return
+    try:
+        steps["shorting"] = daily_shorting(cfg, cal=cal, snapshots=snapshots)
+    except Exception as exc:
+        steps["shorting"] = f"error: {exc}"
+        log.warning("shorting errors: %s", exc)
 
 
 def _load_kis_minutes(

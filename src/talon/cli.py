@@ -65,6 +65,12 @@ from talon.ingest.kis_minutes import (
 )
 from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
 from talon.ingest.overtime import run_overtime
+from talon.ingest.shorting import (
+    DATASET_NAMES,
+    backfill_shorting,
+    daily_shorting,
+    verify_shorting,
+)
 from talon.ingest.us_calendar import run_us_calendar
 from talon.ingest.us_eod import run_us_eod
 from talon.ingest.vkospi import backfill_vkospi, vkospi_status
@@ -635,6 +641,83 @@ def vkospi_status_cmd() -> None:
     cfg = load_settings()
     with runtime(cfg, toss="skip") as rt:
         report = vkospi_status(rt.series, rt.cal)
+    click.echo(report.model_dump_json(indent=2))
+    if report.status != "ok":
+        sys.exit(1)
+
+
+@main.group()
+def shorting() -> None:
+    """KRX 공매도 (거래·잔고·투자자별, 일별)."""
+
+
+@shorting.command("backfill")
+@click.option(
+    "--dataset",
+    type=click.Choice(["trade", "balance", "investor", "all"]),
+    default="all",
+    show_default=True,
+)
+@click.option("--start", "start_text", default="2016-01-01", show_default=True, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def shorting_backfill(dataset: str, start_text: str, end_text: str | None) -> None:
+    cfg = load_settings()
+    if not cfg.krx_login_configured:
+        raise click.ClickException("TALON_KRX_ID / TALON_KRX_PASSWORD 설정이 필요합니다")
+    selected = list(DATASET_NAMES) if dataset == "all" else [dataset]
+    with job_lock(cfg.locks_dir / "shorting-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("shorting backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            start = date.fromisoformat(start_text)
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if end < start:
+                raise click.ClickException("종료일이 시작일보다 빠릅니다")
+
+            def report(index: int, total: int, day: date) -> None:
+                if index % 25 == 0 or index == total:
+                    click.echo(f"{index}/{total} {day}")
+
+            summaries = {}
+            for name in selected:
+                summary = backfill_shorting(
+                    cfg,
+                    cal=rt.cal,
+                    state=rt.state,
+                    snapshots=rt.snapshots,
+                    dataset=DATASET_NAMES[name],
+                    start=start,
+                    end=end,
+                    progress=report,
+                )
+                summaries[name] = summary.model_dump(mode="json")
+    click.echo(json.dumps(summaries, ensure_ascii=False))
+
+
+@shorting.command("daily")
+def shorting_daily() -> None:
+    cfg = load_settings()
+    if not cfg.krx_login_configured:
+        raise click.ClickException("TALON_KRX_ID / TALON_KRX_PASSWORD 설정이 필요합니다")
+    with runtime(cfg, toss="skip") as rt:
+        result = daily_shorting(cfg, cal=rt.cal, snapshots=rt.snapshots)
+    click.echo(result)
+
+
+@shorting.command("verify")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def shorting_verify(start_text: str | None, end_text: str | None) -> None:
+    cfg = load_settings()
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    with runtime(cfg, toss="skip") as rt:
+        report = verify_shorting(cfg, snapshots=rt.snapshots, start=start, end=end)
     click.echo(report.model_dump_json(indent=2))
     if report.status != "ok":
         sys.exit(1)

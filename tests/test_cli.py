@@ -652,6 +652,98 @@ def test_kis_minutes_backfill_rps_overrides_cfg(tmp_path, monkeypatch, cfg):
     assert captured["cfg"].kis_rps == 12
 
 
+def test_shorting_group_is_registered():
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "shorting" in result.output
+
+
+def test_shorting_backfill_requires_krx_login(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shorting", "backfill"])
+    assert result.exit_code != 0
+    assert "TALON_KRX_ID" in result.output
+
+
+def test_shorting_backfill_smoke_runs_every_dataset(tmp_path, monkeypatch, cfg):
+    import json
+
+    from talon.models import BackfillSummary
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_KRX_ID", "u")
+    monkeypatch.setenv("TALON_KRX_PASSWORD", "p")
+    seen = []
+
+    def fake_backfill(*a, dataset, **k):
+        seen.append(dataset)
+        return BackfillSummary(status="ok", sessions=1, loaded=1)
+
+    monkeypatch.setattr("talon.cli.backfill_shorting", fake_backfill)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shorting", "backfill", "--end", "2026-07-16"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output.splitlines()[-1])
+    assert set(payload) == {"trade", "balance", "investor"}
+    assert len(seen) == 3
+
+
+def test_shorting_daily_smoke(tmp_path, monkeypatch, cfg):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setenv("TALON_KRX_ID", "u")
+    monkeypatch.setenv("TALON_KRX_PASSWORD", "p")
+    monkeypatch.setattr(
+        "talon.cli.daily_shorting", lambda *a, **k: "trade 1/1, balance 0/1, investor 1/1"
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shorting", "daily"])
+    assert result.exit_code == 0, result.output
+    assert "trade 1/1" in result.output
+
+
+def test_shorting_verify_smoke_ok(tmp_path, monkeypatch, cfg):
+    import json
+
+    from talon.models import ShortingVerifyReport
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setattr(
+        "talon.cli.verify_shorting",
+        lambda *a, **k: ShortingVerifyReport(status="ok", trade_days=2, trade_rows=10),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shorting", "verify"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["trade_rows"] == 10
+
+
+def test_shorting_verify_exits_nonzero_on_issues(tmp_path, monkeypatch, cfg):
+    from talon.models import ShortingVerifyReport
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TALON_DATA_DIR", str(cfg.data_dir))
+    monkeypatch.setattr(
+        "talon.cli.verify_shorting",
+        lambda *a, **k: ShortingVerifyReport(status="issues", ratio_violations=3),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shorting", "verify"])
+    assert result.exit_code == 1
+
+
 def test_lookahead_smoke_on_flat_data(tmp_path, monkeypatch, cfg, snapshots, series):
     import json
 

@@ -376,6 +376,37 @@ def test_eod_skips_kis_minutes_without_kis(cfg, cal, state, snapshots, series, a
     assert summary.steps["kis_minutes"] == "skipped-no-kis"
 
 
+def test_eod_skips_shorting_without_krx_login(cfg, cal, state, snapshots, series, alerter, sources):
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["shorting"] == "skipped-no-krx-login"
+
+
+def test_eod_records_shorting_step(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    monkeypatch.setattr("talon.ingest.eod.daily_flows", lambda *a, **k: "up-to-date")
+    monkeypatch.setattr(
+        "talon.ingest.eod.daily_shorting", lambda *a, **k: "trade 1/1, balance 1/1, investor 1/1"
+    )
+    cfg = cfg.model_copy(update={"krx_id": "u", "krx_password": "p"})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["shorting"] == "trade 1/1, balance 1/1, investor 1/1"
+
+
+def test_eod_shorting_error_is_captured(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    def boom(*a, **k):
+        raise SourceError("공매도 실패")
+
+    monkeypatch.setattr("talon.ingest.eod.daily_flows", lambda *a, **k: "up-to-date")
+    monkeypatch.setattr("talon.ingest.eod.daily_shorting", boom)
+    cfg = cfg.model_copy(update={"krx_id": "u", "krx_password": "p"})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.status == "ok"
+    assert summary.steps["shorting"] == "error: 공매도 실패"
+
+
 def test_eod_records_kis_minutes_step(
     cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
 ):
