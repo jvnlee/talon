@@ -21,6 +21,9 @@ BASE_URL = "https://data-dbg.krx.co.kr/svc/apis"
 STOCK_ENDPOINTS = ("sto/stk_bydd_trd", "sto/ksq_bydd_trd")
 INFO_ENDPOINTS = ("sto/stk_isu_base_info", "sto/ksq_isu_base_info")
 EARLIEST_DAY = date(2010, 1, 4)
+TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+RETRIES = 2
+RETRY_BACKOFF_SECONDS = 2.0
 
 _REQUIRED_FIELDS = (
     "ISU_CD",
@@ -76,7 +79,8 @@ class KrxOpenApiSource:
         auth_key: str,
         *,
         base_url: str = BASE_URL,
-        timeout: float = 30.0,
+        timeout: httpx.Timeout | float = TIMEOUT,
+        retries: int = RETRIES,
         throttle: float = 0.2,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
@@ -84,6 +88,7 @@ class KrxOpenApiSource:
         if not auth_key:
             raise SourceError("KRX Open API 인증키가 없습니다 (TALON_KRX_API_KEY)")
         self._throttle = throttle
+        self._retries = retries
         self._sleep = sleep
         self._http = httpx.Client(
             base_url=base_url.rstrip("/"),
@@ -95,11 +100,25 @@ class KrxOpenApiSource:
     def close(self) -> None:
         self._http.close()
 
+    def _request(self, endpoint: str, day: date) -> httpx.Response:
+        params = {"basDd": day.strftime("%Y%m%d")}
+        attempt = 0
+        while True:
+            try:
+                return self._http.get(f"/{endpoint}", params=params)
+            except httpx.TimeoutException as exc:
+                attempt += 1
+                if attempt > self._retries:
+                    raise SourceError(f"KRX Open API 요청 실패 ({endpoint}): {exc}") from exc
+                log.warning(
+                    "KRX Open API timed out (%s), retry %d/%d", endpoint, attempt, self._retries
+                )
+                self._sleep(RETRY_BACKOFF_SECONDS * attempt)
+            except httpx.HTTPError as exc:
+                raise SourceError(f"KRX Open API 요청 실패 ({endpoint}): {exc}") from exc
+
     def rows(self, endpoint: str, day: date) -> list[dict[str, Any]]:
-        try:
-            response = self._http.get(f"/{endpoint}", params={"basDd": day.strftime("%Y%m%d")})
-        except httpx.HTTPError as exc:
-            raise SourceError(f"KRX Open API 요청 실패 ({endpoint}): {exc}") from exc
+        response = self._request(endpoint, day)
         if response.status_code == 401:
             raise SourceError(
                 f"KRX Open API 인증 거부 ({endpoint}): 인증키가 유효하지 않거나 "

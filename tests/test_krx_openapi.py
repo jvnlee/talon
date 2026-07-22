@@ -136,6 +136,56 @@ def test_queries_both_markets_with_basdd():
     assert all(key == "secret" for _, _, key in seen)
 
 
+def test_timeouts_are_retried_with_backoff():
+    calls = []
+    naps = []
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if len(calls) < 3:
+            raise httpx.ReadTimeout("The read operation timed out")
+        return httpx.Response(200, json={"OutBlock_1": [record("005930")]})
+
+    source = KrxOpenApiSource(
+        "test-key", transport=httpx.MockTransport(flaky), throttle=0.0, sleep=naps.append
+    )
+    rows = source.rows("sto/stk_bydd_trd", DAY)
+
+    assert [row["ISU_CD"] for row in rows] == ["005930"]
+    assert len(calls) == 3
+    assert naps == [2.0, 4.0]
+
+
+def test_timeout_exhausting_retries_becomes_source_error():
+    calls = []
+
+    def dead(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        raise httpx.ReadTimeout("The read operation timed out")
+
+    source = KrxOpenApiSource(
+        "test-key", transport=httpx.MockTransport(dead), throttle=0.0, sleep=lambda _: None
+    )
+    with pytest.raises(SourceError, match="stk_bydd_trd"):
+        source.rows("sto/stk_bydd_trd", DAY)
+    assert len(calls) == 3
+
+
+def test_non_timeout_transport_errors_fail_without_retry():
+    calls = []
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        raise httpx.ConnectError("connection refused")
+
+    source = KrxOpenApiSource(
+        "test-key", transport=httpx.MockTransport(refused), throttle=0.0, sleep=lambda _: None
+    )
+    with pytest.raises(SourceError, match="요청 실패"):
+        source.rows("sto/stk_bydd_trd", DAY)
+    assert len(calls) == 1
+
+
 def info_record(symbol, *, market="KOSPI", group="주권", kind="보통주", section=""):
     return {
         "ISU_CD": f"KR7{symbol}008",
