@@ -210,6 +210,23 @@ class VkospiStatusReport(BaseModel):
     range_violations: list[str] = []
 
 
+class ActionsBackfillSummary(BaseModel):
+    status: str
+    parts: dict[str, BackfillSummary] = {}
+
+
+class ActionsDailySummary(BaseModel):
+    status: str
+    parts: dict[str, str] = {}
+    rows: dict[str, int] = {}
+
+
+class ActionsVerifyReport(BaseModel):
+    status: str
+    parts: dict[str, str] = {}
+    coverage: dict[str, str] = {}
+
+
 class KisMinutesBackfillSummary(BaseModel):
     status: str
     sessions: int = 0

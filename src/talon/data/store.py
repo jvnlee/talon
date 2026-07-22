@@ -52,6 +52,10 @@ DART_FILINGS = "dart_filings"
 ADJUST_FACTORS = "adjust_factors"
 ADJUST_MANIFEST = "adjust_manifest"
 ADJUST_MANIFEST_NAME = "coverage"
+VI_EVENTS = "vi_events_1d"
+MARKET_ALERTS = "market_alerts_1d"
+SHORT_OVERHEAT = "short_overheat_1d"
+TRADING_HALTS = "trading_halts_1d"
 
 CANDLE_SCHEMA: dict[str, pl.DataType] = {
     "ts": pl.Datetime("us", "UTC"),
@@ -515,6 +519,62 @@ KIS_MINUTES_SCHEMA: dict[str, pl.DataType] = {
     "close": pl.Float64(),
     "volume": pl.Float64(),
     "cum_value": pl.Float64(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+VI_EVENTS_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "name": pl.Utf8(),
+    "market": pl.Utf8(),
+    "vi_kind": pl.Utf8(),
+    "trigger_time": pl.Utf8(),
+    "release_time": pl.Utf8(),
+    "reference_price": pl.Float64(),
+    "trigger_price": pl.Float64(),
+    "divergence_pct": pl.Float64(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+MARKET_ALERTS_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "level": pl.Utf8(),
+    "symbol": pl.Utf8(),
+    "isin": pl.Utf8(),
+    "name": pl.Utf8(),
+    "market": pl.Utf8(),
+    "design_dd": pl.Date(),
+    "release_dd": pl.Date(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+SHORT_OVERHEAT_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "isin": pl.Utf8(),
+    "name": pl.Utf8(),
+    "market": pl.Utf8(),
+    "mkt_id": pl.Utf8(),
+    "restrict_apply_dd": pl.Date(),
+    "release_dd": pl.Date(),
+    "valu_pd_tr_dys": pl.Float64(),
+    "tdd_srtsell_wt": pl.Float64(),
+    "prc_yd": pl.Float64(),
+    "tdd_srtsell_trdval_incdec_rt": pl.Float64(),
+    "valu_pd_avg_srtsell_wt": pl.Float64(),
+    "dtec_type": pl.Utf8(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+TRADING_HALTS_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "isin": pl.Utf8(),
+    "name": pl.Utf8(),
+    "market": pl.Utf8(),
+    "reason": pl.Utf8(),
+    "last_trade_day": pl.Date(),
+    "resume_day": pl.Date(),
     "fetched_at": pl.Datetime("us", "UTC"),
 }
 
