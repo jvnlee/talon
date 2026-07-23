@@ -18,6 +18,7 @@ from talon.sources.kis_market import (
     fetch_overseas_index_daily,
     fetch_overtime_price,
     fetch_overtime_ranking,
+    fetch_program_daily,
     fetch_program_market,
     fetch_program_trade,
     fetch_volume_power,
@@ -509,6 +510,91 @@ def test_program_market_empty_returns_empty(tmp_path):
     path = "/uapi/domestic-stock/v1/quotations/comp-program-trade-today"
     with make_client(tmp_path, {path: {"rt_cd": "0"}}) as client:
         assert fetch_program_market(client, "K") == []
+
+
+def program_daily_payload():
+    rows = [
+        {
+            "stck_bsop_date": "20260723",
+            "stck_clpr": "270000",
+            "prdy_ctrt": "3.65",
+            "acml_vol": "16011816",
+            "acml_tr_pbmn": "4308084851750",
+            "whol_smtn_seln_vol": "5248524",
+            "whol_smtn_shnu_vol": "5920208",
+            "whol_smtn_ntby_qty": "671684",
+            "whol_smtn_seln_tr_pbmn": "1411797804750",
+            "whol_smtn_shnu_tr_pbmn": "1593800255500",
+            "whol_smtn_ntby_tr_pbmn": "182002450750",
+            "whol_ntby_vol_icdc": "999",
+            "whol_ntby_tr_pbmn_icdc2": "888",
+        },
+        {
+            "stck_bsop_date": "20260722",
+            "stck_clpr": "260500",
+            "prdy_ctrt": "-1.20",
+            "acml_vol": "12000000",
+            "acml_tr_pbmn": "3100000000000",
+            "whol_smtn_seln_vol": "4000000",
+            "whol_smtn_shnu_vol": "3500000",
+            "whol_smtn_ntby_qty": "-500000",
+            "whol_smtn_seln_tr_pbmn": "1040000000000",
+            "whol_smtn_shnu_tr_pbmn": "910000000000",
+            "whol_smtn_ntby_tr_pbmn": "-130000000000",
+        },
+    ]
+    return {"rt_cd": "0", "output": rows}
+
+
+def test_program_daily_parses_rows_and_identities(tmp_path):
+    path = "/uapi/domestic-stock/v1/quotations/program-trade-by-stock-daily"
+    with make_client(tmp_path, {path: program_daily_payload()}) as client:
+        rows = fetch_program_daily(client, "005930", date(2026, 7, 23))
+
+    assert len(rows) == 2
+    row = rows[0]
+    assert row["day"] == date(2026, 7, 23)
+    assert row["symbol"] == "005930"
+    assert row["close"] == 270000.0
+    assert row["change_pct"] == 3.65
+    assert row["volume"] == 16011816.0
+    assert row["value"] == 4308084851750.0
+    assert row["sell_qty"] == 5248524.0
+    assert row["buy_qty"] == 5920208.0
+    assert row["net_qty"] == 671684.0
+    assert row["net_qty"] == row["buy_qty"] - row["sell_qty"]
+    assert row["net_value"] == 182002450750.0
+    assert row["net_value"] == row["buy_value"] - row["sell_value"]
+    assert "whol_ntby_vol_icdc" not in row
+    assert "whol_ntby_tr_pbmn_icdc2" not in row
+    assert rows[1]["net_qty"] == -500000.0
+
+
+def test_program_daily_adjusted_scale_stored_raw(tmp_path):
+    path = "/uapi/domestic-stock/v1/quotations/program-trade-by-stock-daily"
+    restated = {
+        "rt_cd": "0",
+        "output": [
+            {
+                "stck_bsop_date": "20160104",
+                "stck_clpr": "24100",
+                "acml_vol": "15346950",
+                "acml_tr_pbmn": "370000000000",
+                "whol_smtn_ntby_tr_pbmn": "-140807138000",
+            }
+        ],
+    }
+    with make_client(tmp_path, {path: restated}) as client:
+        rows = fetch_program_daily(client, "005930", date(2016, 1, 4))
+    assert rows[0]["close"] == 24100.0
+    assert rows[0]["volume"] == 15346950.0
+    assert rows[0]["net_value"] == -140807138000.0
+
+
+def test_program_daily_empty_returns_empty(tmp_path):
+    path = "/uapi/domestic-stock/v1/quotations/program-trade-by-stock-daily"
+    with make_client(tmp_path, {path: {"rt_cd": "0"}}) as client:
+        assert fetch_program_daily(client, "005930", date(2026, 7, 23)) == []
 
 
 def test_frgnmem_trend_assigns_seq_and_keeps_same_second_rows(tmp_path):
