@@ -56,6 +56,9 @@ VI_EVENTS = "vi_events_1d"
 MARKET_ALERTS = "market_alerts_1d"
 SHORT_OVERHEAT = "short_overheat_1d"
 TRADING_HALTS = "trading_halts_1d"
+KR_EVENTS = "kr_events"
+KR_EVENTS_HISTORY = "kr_events_history"
+KR_EVENTS_HISTORY_NAME = "all"
 
 CANDLE_SCHEMA: dict[str, pl.DataType] = {
     "ts": pl.Datetime("us", "UTC"),
@@ -403,6 +406,25 @@ US_EVENTS_HISTORY_SCHEMA: dict[str, pl.DataType] = {
     "category": pl.Utf8(),
     "tier": pl.Utf8(),
     "source": pl.Utf8(),
+}
+
+KR_EVENTS_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "event_day": pl.Date(),
+    "category": pl.Utf8(),
+    "tier": pl.Utf8(),
+    "source": pl.Utf8(),
+    "detail": pl.Utf8(),
+    "captured_at": pl.Datetime("us", "UTC"),
+}
+
+KR_EVENTS_HISTORY_SCHEMA: dict[str, pl.DataType] = {
+    "event_key": pl.Utf8(),
+    "event_day": pl.Date(),
+    "category": pl.Utf8(),
+    "tier": pl.Utf8(),
+    "source": pl.Utf8(),
+    "detail": pl.Utf8(),
 }
 
 US_EARNINGS_SCHEMA: dict[str, pl.DataType] = {
