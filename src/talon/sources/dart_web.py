@@ -40,6 +40,7 @@ class _DisclosureListParser(HTMLParser):
         self.total_count: int | None = None
         self.time_header_seen = False
         self.rows: list[DisclosureRow] = []
+        self.row_count = 0
         self._in_list = False
         self._in_thead = False
         self._in_tbody = False
@@ -125,6 +126,7 @@ class _DisclosureListParser(HTMLParser):
 
     def _begin_row(self) -> None:
         self._in_row = True
+        self.row_count += 1
         self._cell_index = -1
         self._cap_time = False
         self._cap_corp = False
@@ -144,7 +146,7 @@ class _DisclosureListParser(HTMLParser):
         self.rows.append(DisclosureRow(self._rcept_no, received_time, corp_name, title))
 
 
-def parse_disclosure_page(html: str) -> tuple[list[DisclosureRow], int]:
+def parse_disclosure_page(html: str) -> tuple[list[DisclosureRow], int, int]:
     parser = _DisclosureListParser()
     parser.feed(html)
     if parser.total_count is None or not parser.time_header_seen:
@@ -155,7 +157,7 @@ def parse_disclosure_page(html: str) -> tuple[list[DisclosureRow], int]:
         raise SchemaDriftError(
             f"DART 공시목록 파싱 0행인데 totalCnt={parser.total_count} (구조 변경 의심)"
         )
-    return parser.rows, parser.total_count
+    return parser.rows, parser.total_count, parser.row_count
 
 
 def _fetch_page(
@@ -192,11 +194,13 @@ def fetch_disclosure_day(
             page = 1
             while True:
                 sleep(pause)
-                rows, total = parse_disclosure_page(_fetch_page(client, url, day, page))
+                rows, total, raw_count = parse_disclosure_page(
+                    _fetch_page(client, url, day, page)
+                )
                 for row in rows:
                     seen.setdefault(row.rcept_no, row)
                 pages = (total + ROWS_PER_PAGE - 1) // ROWS_PER_PAGE
-                if page >= pages or len(rows) < ROWS_PER_PAGE:
+                if page >= pages or raw_count < ROWS_PER_PAGE:
                     break
                 page += 1
     return list(seen.values())
