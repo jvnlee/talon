@@ -248,6 +248,34 @@ class KrEventsVerifyReport(BaseModel):
     counts: dict[str, int] = {}
 
 
+class UsFutBackfillSummary(BaseModel):
+    status: str
+    days: int = 0
+    loaded_days: int = 0
+    rows: int = 0
+    skipped_days: int = 0
+    stale_days: int = 0
+    unavailable_days: int = 0
+    failed: list[str] = []
+    long_gaps: list[str] = []
+
+
+class UsFutVerifyReport(BaseModel):
+    status: str
+    symbols: dict[str, int] = {}
+    first_day: date | None = None
+    last_day: date | None = None
+    coverage_sessions: int = 0
+    missing_sessions: list[str] = []
+    known_holiday_gaps: list[str] = []
+    level_checked: int = 0
+    level_violations: int = 0
+    duplicate_keys: int = 0
+    bar_ts_violations: int = 0
+    stale_distribution: dict[str, int] = {}
+    examples: list[str] = []
+
+
 class KisMinutesBackfillSummary(BaseModel):
     status: str
     sessions: int = 0

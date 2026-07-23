@@ -117,6 +117,9 @@ class TalonSettings(BaseSettings):
     kr_events_forward_days: int = 40
     us_source_throttle_seconds: float = 0.5
 
+    usfut_enabled: bool = False
+    usfut_pause_seconds: float = 0.3
+
     fred_api_key: str = ""
     ecos_api_key: str = ""
 

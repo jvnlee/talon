@@ -85,6 +85,7 @@ from talon.ingest.shorting import (
 )
 from talon.ingest.us_calendar import run_us_calendar
 from talon.ingest.us_eod import run_us_eod
+from talon.ingest.usfut import backfill_usfut, daily_usfut, verify_usfut
 from talon.ingest.vkospi import backfill_vkospi, vkospi_status
 from talon.ingest.watchdog import run_watchdog
 from talon.locks import job_lock
@@ -655,6 +656,74 @@ def vkospi_status_cmd() -> None:
         report = vkospi_status(rt.series, rt.cal)
     click.echo(report.model_dump_json(indent=2))
     if report.status != "ok":
+        sys.exit(1)
+
+
+@main.group()
+def usfut() -> None:
+    pass
+
+
+@usfut.command("backfill")
+@click.option("--start", "start_text", default="2011-09-19", show_default=True, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def usfut_backfill(start_text: str, end_text: str | None) -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "usfut-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("usfut backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            start = date.fromisoformat(start_text)
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if end < start:
+                raise click.ClickException("종료일이 시작일보다 빠릅니다")
+
+            def report(index: int, total: int, day: date) -> None:
+                if index % 100 == 0 or index == total:
+                    click.echo(f"{index}/{total} {day}")
+
+            summary = backfill_usfut(
+                snapshots=rt.snapshots,
+                start=start,
+                end=end,
+                pause=cfg.usfut_pause_seconds,
+                progress=report,
+            )
+    click.echo(summary.model_dump_json())
+    if summary.status not in {"ok", "partial"}:
+        sys.exit(1)
+
+
+@usfut.command("daily")
+def usfut_daily() -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "usfut-daily.lock") as acquired:
+        if not acquired:
+            click.echo("usfut daily가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            result = daily_usfut(snapshots=rt.snapshots, pause=cfg.usfut_pause_seconds)
+    click.echo(result)
+
+
+@usfut.command("verify")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def usfut_verify(start_text: str | None, end_text: str | None) -> None:
+    cfg = load_settings()
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    with runtime(cfg, toss="skip") as rt:
+        report = verify_usfut(
+            snapshots=rt.snapshots, series=rt.series, cal=rt.cal, start=start, end=end
+        )
+    click.echo(report.model_dump_json(indent=2))
+    if report.status not in {"ok", "empty"}:
         sys.exit(1)
 
 

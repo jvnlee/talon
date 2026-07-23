@@ -26,6 +26,7 @@ from talon.ingest.kis_minutes import daily_kis_minutes
 from talon.ingest.kr_events import daily_kr_events
 from talon.ingest.shorting import daily_shorting
 from talon.ingest.universe import candidate_symbols, rebuild_universe
+from talon.ingest.usfut import daily_usfut
 from talon.ingest.vkospi import VKOSPI_NAME, daily_vkospi
 from talon.markets.kr import KrxCalendar
 from talon.models import EodSummary
@@ -119,6 +120,7 @@ def _run_eod_steps(
     _load_market_actions(cfg, cal, snapshots, steps)
     _load_kr_events(cfg, cal, snapshots, series, day, steps)
     _load_kis_minutes(cfg, cal, snapshots, steps)
+    _load_usfut(cfg, snapshots, steps)
     if source == "pykrx":
         _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
     else:
@@ -432,6 +434,21 @@ def _load_kis_minutes(
     except Exception as exc:
         steps["kis_minutes"] = f"error: {exc}"
         log.warning("kis minutes errors: %s", exc)
+
+
+def _load_usfut(
+    cfg: TalonSettings,
+    snapshots: DatePartitionedStore,
+    steps: dict[str, str],
+) -> None:
+    if not cfg.usfut_enabled:
+        steps["usfut"] = "skipped-disabled"
+        return
+    try:
+        steps["usfut"] = daily_usfut(snapshots=snapshots, pause=cfg.usfut_pause_seconds)
+    except Exception as exc:
+        steps["usfut"] = f"error: {exc}"
+        log.warning("usfut errors: %s", exc)
 
 
 def _run_crosscheck(

@@ -35,6 +35,7 @@ US_EVENTS_HISTORY_NAME = "all"
 US_EARNINGS = "us_earnings"
 US_KR_MAP = "us_kr_map"
 US_KR_MAP_NAME = "map"
+US_FUTURES_1510 = "us_futures_1510_1d"
 MARKET_CAP = "marketcap"
 INDICATOR_MINUTE = "indicators_1m"
 INDICATOR_DAILY = "indicators_1d"
@@ -386,6 +387,16 @@ US_MACRO_DAILY_SCHEMA: dict[str, pl.DataType] = {
     "value": pl.Float64(),
     "source": pl.Utf8(),
     "captured_at": pl.Datetime("us", "UTC"),
+}
+
+US_FUTURES_1510_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "price": pl.Float64(),
+    "bar_ts": pl.Datetime("us", "UTC"),
+    "stale_minutes": pl.Int32(),
+    "source": pl.Utf8(),
+    "fetched_at": pl.Datetime("us", "UTC"),
 }
 
 US_EVENTS_SCHEMA: dict[str, pl.DataType] = {
