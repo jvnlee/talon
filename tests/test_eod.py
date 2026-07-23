@@ -419,6 +419,7 @@ def test_eod_records_kis_minutes_step(
     cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
 ):
     monkeypatch.setattr("talon.ingest.eod.daily_kis_minutes", lambda *a, **k: "2/2 days, 500 rows")
+    monkeypatch.setattr("talon.ingest.eod.daily_credit", lambda *a, **k: "ok")
     cfg = cfg.model_copy(update={"kis_app_key": "k", "kis_app_secret": "s"})
     summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
     assert summary.steps["kis_minutes"] == "2/2 days, 500 rows"
@@ -431,6 +432,7 @@ def test_eod_kis_minutes_error_is_captured(
         raise SourceError("분봉 실패")
 
     monkeypatch.setattr("talon.ingest.eod.daily_kis_minutes", boom)
+    monkeypatch.setattr("talon.ingest.eod.daily_credit", lambda *a, **k: "ok")
     cfg = cfg.model_copy(update={"kis_app_key": "k", "kis_app_secret": "s"})
     summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
     assert summary.status == "ok"

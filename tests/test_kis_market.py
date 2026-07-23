@@ -5,6 +5,9 @@ import httpx
 
 from talon.sources.kis import KisClient
 from talon.sources.kis_market import (
+    CREDIT_DAILY_PATH,
+    CREDIT_DAILY_TR,
+    fetch_credit_daily,
     fetch_flow_ranking,
     fetch_frgnmem_ranking,
     fetch_frgnmem_trend,
@@ -641,6 +644,110 @@ def test_overseas_daily_parses_and_sorts(tmp_path):
     assert [row["day"].isoformat() for row in rows] == ["2026-07-16", "2026-07-17"]
     assert rows[-1]["close"] == 204.92
     assert rows[-1]["volume"] == 150000000.0
+
+
+def credit_row0():
+    return {
+        "deal_date": "20260720",
+        "stlm_date": "20260722",
+        "stck_prpr": "244000",
+        "stck_oprc": "241000",
+        "stck_hgpr": "257500",
+        "stck_lwpr": "240000",
+        "prdy_ctrt": "1.23",
+        "acml_vol": "26804038",
+        "whol_loan_new_stcn": "2771679",
+        "whol_loan_rdmp_stcn": "2770223",
+        "whol_loan_rmnd_stcn": "23300119",
+        "whol_loan_new_amt": "54977186",
+        "whol_loan_rdmp_amt": "59421164",
+        "whol_loan_rmnd_amt": "501478648",
+        "whol_loan_rmnd_rate": "0.39",
+        "whol_loan_gvrt": "10.33",
+        "whol_stln_new_stcn": "4445",
+        "whol_stln_rdmp_stcn": "5070",
+        "whol_stln_rmnd_stcn": "5636",
+        "whol_stln_new_amt": "110592",
+        "whol_stln_rdmp_amt": "127127",
+        "whol_stln_rmnd_amt": "104130",
+        "whol_stln_rmnd_rate": "0.00",
+        "whol_stln_gvrt": "0.01",
+    }
+
+
+def credit_payload():
+    older = credit_row0() | {"deal_date": "20260717", "stlm_date": "20260721"}
+    blank = credit_row0() | {"deal_date": ""}
+    return {"rt_cd": "0", "output": [credit_row0(), older, blank]}
+
+
+def test_fetch_credit_daily_maps_scaled_price_absolute_qty_raw_amt(tmp_path):
+    with make_client(tmp_path, {CREDIT_DAILY_PATH: credit_payload()}) as client:
+        rows = fetch_credit_daily(client, "005930", date(2026, 7, 23))
+
+    assert len(rows) == 2
+    row = rows[0]
+    assert row["day"] == date(2026, 7, 20)
+    assert row["settle_day"] == date(2026, 7, 22)
+    assert row["close"] == 244000.0
+    assert row["open"] == 241000.0
+    assert row["high"] == 257500.0
+    assert row["low"] == 240000.0
+    assert row["change_pct"] == 1.23
+    assert row["volume"] == 26804038.0
+    assert row["loan_new_qty"] == 2771679.0
+    assert row["loan_repay_qty"] == 2770223.0
+    assert row["loan_balance_qty"] == 23300119.0
+    assert row["loan_new_amt"] == 54977186.0
+    assert row["loan_balance_amt"] == 501478648.0
+    assert row["loan_balance_rate"] == 0.39
+    assert row["loan_give_rate"] == 10.33
+    assert row["short_balance_qty"] == 5636.0
+    assert row["short_balance_amt"] == 104130.0
+    assert row["short_give_rate"] == 0.01
+
+
+def test_fetch_credit_daily_skips_blank_deal_date(tmp_path):
+    with make_client(tmp_path, {CREDIT_DAILY_PATH: credit_payload()}) as client:
+        rows = fetch_credit_daily(client, "005930", date(2026, 7, 23))
+    assert [row["day"] for row in rows] == [date(2026, 7, 20), date(2026, 7, 17)]
+
+
+def test_fetch_credit_daily_nonlist_output_returns_empty(tmp_path):
+    with make_client(tmp_path, {CREDIT_DAILY_PATH: {"rt_cd": "0", "output": {}}}) as client:
+        assert fetch_credit_daily(client, "005930", date(2026, 7, 23)) == []
+
+
+def test_fetch_credit_daily_sends_tr_screen_and_anchor(tmp_path):
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["tr_id"] = request.headers["tr_id"]
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=credit_payload())
+
+    token_path = tmp_path / "kis_token.json"
+    token_path.write_text(
+        json.dumps({"access_token": "tok", "expired_at": "2099-01-01 00:00:00"})
+    )
+    with KisClient(
+        "key",
+        "secret",
+        base_url="https://kis.test",
+        token_path=token_path,
+        transport=httpx.MockTransport(handler),
+        sleep=lambda _: None,
+    ) as client:
+        fetch_credit_daily(client, "005930", date(2026, 7, 23))
+
+    assert seen["path"] == CREDIT_DAILY_PATH
+    assert seen["tr_id"] == CREDIT_DAILY_TR
+    params = seen["params"]
+    assert params["FID_COND_MRKT_DIV_CODE"] == "J"
+    assert params["FID_COND_SCR_DIV_CODE"] == "20476"
+    assert params["FID_INPUT_ISCD"] == "005930"
+    assert params["FID_INPUT_DATE_1"] == "20260723"
 
 
 def test_overseas_index_daily_parses(tmp_path):
