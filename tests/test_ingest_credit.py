@@ -6,6 +6,7 @@ import polars as pl
 from conftest import write_stock_info
 from talon.data.store import CREDIT_BALANCE, CREDIT_BALANCE_1D_SCHEMA
 from talon.ingest.credit import backfill_credit, daily_credit, verify_credit
+from talon.sources.delisting import DELISTING_SCHEMA
 
 FETCHED = datetime(2026, 7, 23, 6, 0, tzinfo=UTC)
 SYMBOLS = ["005930", "000660"]
@@ -156,21 +157,76 @@ def test_backfill_walks_back_by_fixed_35_day_stride(cfg, state, snapshots):
 
 def test_backfill_clamps_floor_to_credit_start(cfg, state, snapshots):
     calls: list[date] = []
+    below_floor = date(2015, 12, 1)
 
     def fetch(symbol, anchor):
         calls.append(anchor)
+        return [make_row(anchor), make_row(below_floor)]
+
+    backfill_credit(
+        cfg,
+        state=state,
+        snapshots=snapshots,
+        start=date(2015, 1, 1),
+        end=date(2016, 3, 1),
+        symbols=["005930"],
+        fetch=fetch,
+    )
+    assert min(calls) >= date(2016, 1, 4)
+    assert all(day >= date(2016, 1, 4) for day in snapshots.dates(CREDIT_BALANCE))
+    assert not snapshots.has_date(CREDIT_BALANCE, below_floor)
+
+
+def _delisting_frame(rows):
+    records = [
+        {
+            "symbol": symbol,
+            "name": symbol,
+            "market": "KOSPI",
+            "secu_group": "주권",
+            "listing_date": date(2012, 1, 1),
+            "delisting_date": delisting_date,
+            "reason": "",
+            "arrant_end_date": None,
+            "to_symbol": None,
+            "classification": "terminal",
+        }
+        for symbol, delisting_date in rows
+    ]
+    return pl.DataFrame(records, schema=DELISTING_SCHEMA)
+
+
+def test_backfill_universe_unions_recently_delisted_symbols(cfg, state, snapshots):
+    write_stock_info(snapshots, [date(2026, 7, 22)], ["005930"])
+    delisting = _delisting_frame(
+        [
+            ("111111", date(2023, 6, 1)),
+            ("222222", date(2015, 1, 1)),
+            ("333333", None),
+        ]
+    )
+    lock = threading.Lock()
+    seen: list[str] = []
+
+    def fetch(symbol, anchor):
+        with lock:
+            seen.append(symbol)
         return []
 
     backfill_credit(
         cfg,
         state=state,
         snapshots=snapshots,
-        start=date(2010, 1, 1),
-        end=date(2016, 1, 4),
-        symbols=["005930"],
+        start=date(2016, 1, 4),
+        end=date(2026, 7, 20),
+        delisting=delisting,
         fetch=fetch,
     )
-    assert calls == [date(2016, 1, 4)]
+
+    assert "005930" in seen
+    assert "111111" in seen
+    assert "222222" not in seen
+    assert "333333" not in seen
 
 
 def test_verify_ok_on_continuous_clean_data(cfg, snapshots):
