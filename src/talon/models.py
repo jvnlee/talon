@@ -276,6 +276,33 @@ class UsFutVerifyReport(BaseModel):
     examples: list[str] = []
 
 
+class DartTimesBackfillSummary(BaseModel):
+    status: str
+    days: int = 0
+    loaded: int = 0
+    skipped: int = 0
+    out_of_horizon: int = 0
+    failed: list[str] = []
+
+
+class DartTimesDailySummary(BaseModel):
+    status: str
+    days: int = 0
+    rows: int = 0
+    failed: list[str] = []
+
+
+class DartTimesVerifyReport(BaseModel):
+    status: str
+    days: int = 0
+    rows: int = 0
+    bad_time_format: int = 0
+    cross_day_rows: int = 0
+    duplicate_keys: int = 0
+    coverage: dict[str, str] = {}
+    examples: list[str] = []
+
+
 class KisMinutesBackfillSummary(BaseModel):
     status: str
     sessions: int = 0

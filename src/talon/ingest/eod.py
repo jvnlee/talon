@@ -21,6 +21,7 @@ from talon.data.store import (
 )
 from talon.errors import SourceError
 from talon.ingest.actions import daily_actions
+from talon.ingest.dart_times import daily_dart_times
 from talon.ingest.flows import daily_flows
 from talon.ingest.kis_minutes import daily_kis_minutes
 from talon.ingest.kr_events import daily_kr_events
@@ -121,6 +122,7 @@ def _run_eod_steps(
     _load_kr_events(cfg, cal, snapshots, series, day, steps)
     _load_kis_minutes(cfg, cal, snapshots, steps)
     _load_usfut(cfg, snapshots, steps)
+    _load_dart_times(cfg, snapshots, steps)
     if source == "pykrx":
         _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
     else:
@@ -449,6 +451,22 @@ def _load_usfut(
     except Exception as exc:
         steps["usfut"] = f"error: {exc}"
         log.warning("usfut errors: %s", exc)
+
+
+def _load_dart_times(
+    cfg: TalonSettings,
+    snapshots: DatePartitionedStore,
+    steps: dict[str, str],
+) -> None:
+    try:
+        summary = daily_dart_times(cfg, snapshots=snapshots)
+        detail = f"{summary.days} days, {summary.rows} rows"
+        if summary.failed:
+            detail += f", failed {len(summary.failed)}"
+        steps["dart_times"] = detail
+    except Exception as exc:
+        steps["dart_times"] = f"error: {exc}"
+        log.warning("dart times errors: %s", exc)
 
 
 def _run_crosscheck(

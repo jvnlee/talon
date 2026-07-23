@@ -60,6 +60,15 @@ from talon.ingest.actions import (
 from talon.ingest.briefing import run_briefing_snapshot
 from talon.ingest.close_auction import run_close_auction
 from talon.ingest.collect import bootstrap_universe, run_collect
+from talon.ingest.dart_times import (
+    BACKFILL_START as DART_TIMES_START,
+)
+from talon.ingest.dart_times import (
+    DART_WEB_HORIZON,
+    backfill_dart_times,
+    daily_dart_times,
+    verify_dart_times,
+)
 from talon.ingest.eod import run_eod
 from talon.ingest.flows import backfill_flows, daily_flows
 from talon.ingest.history import backfill_daily
@@ -1083,6 +1092,69 @@ def dart_backfill(
     click.echo(
         json.dumps({"written": written, "skipped": skipped, "failed": failed, "total": total})
     )
+
+
+@main.group("dart-times")
+def dart_times() -> None:
+    """DART 접수시각 (dsac001 최근공시 목록 스크레이프, day 파티션, rcept_no 조인)."""
+
+
+@dart_times.command("backfill")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def dart_times_backfill(start_text: str | None, end_text: str | None) -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "dart-times-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("dart-times backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            start = (
+                date.fromisoformat(start_text)
+                if start_text
+                else max(DART_TIMES_START, DART_WEB_HORIZON)
+            )
+            end = date.fromisoformat(end_text) if end_text else _today_kst()
+            if end < start:
+                raise click.ClickException("종료일이 시작일보다 빠릅니다")
+
+            def report(index: int, total: int, day: date) -> None:
+                if index % 25 == 0 or index == total:
+                    click.echo(f"{index}/{total} {day}")
+
+            summary = backfill_dart_times(
+                cfg,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                start=start,
+                end=end,
+                progress=report,
+            )
+    click.echo(summary.model_dump_json())
+    if summary.status == "aborted":
+        sys.exit(1)
+
+
+@dart_times.command("daily")
+def dart_times_daily() -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "dart-times-daily.lock") as acquired:
+        if not acquired:
+            click.echo("dart-times daily가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = daily_dart_times(cfg, snapshots=rt.snapshots)
+    click.echo(summary.model_dump_json())
+
+
+@dart_times.command("verify")
+def dart_times_verify() -> None:
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        report = verify_dart_times(cfg, snapshots=rt.snapshots)
+    click.echo(report.model_dump_json(indent=2))
+    if not (report.status == "ok" or report.status == "empty"):
+        sys.exit(1)
 
 
 def _columns_warmup(strategies: list[StrategySpec], regime_filter: RegimeAssessor) -> int:

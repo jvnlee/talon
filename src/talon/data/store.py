@@ -50,6 +50,7 @@ KIS_MINUTES = "kis_minutes_1m"
 STOCK_INFO = "stock_info"
 DELISTING = "delisting"
 DART_FILINGS = "dart_filings"
+DART_FILING_TIMES = "dart_filing_times"
 ADJUST_FACTORS = "adjust_factors"
 ADJUST_MANIFEST = "adjust_manifest"
 ADJUST_MANIFEST_NAME = "coverage"
@@ -608,6 +609,16 @@ TRADING_HALTS_SCHEMA: dict[str, pl.DataType] = {
     "reason": pl.Utf8(),
     "last_trade_day": pl.Date(),
     "resume_day": pl.Date(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+DART_FILING_TIMES_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "rcept_no": pl.Utf8(),
+    "received_time": pl.Utf8(),
+    "corp_name": pl.Utf8(),
+    "title": pl.Utf8(),
+    "source": pl.Utf8(),
     "fetched_at": pl.Datetime("us", "UTC"),
 }
 
