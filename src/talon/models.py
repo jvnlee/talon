@@ -303,6 +303,12 @@ class DartTimesVerifyReport(BaseModel):
     examples: list[str] = []
 
 
+class ProgramVerifyReport(BaseModel):
+    status: str
+    market: str = ""
+    stock: str = ""
+
+
 class KisMinutesBackfillSummary(BaseModel):
     status: str
     sessions: int = 0

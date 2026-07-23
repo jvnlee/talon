@@ -62,6 +62,8 @@ TRADING_HALTS = "trading_halts_1d"
 KR_EVENTS = "kr_events"
 KR_EVENTS_HISTORY = "kr_events_history"
 KR_EVENTS_HISTORY_NAME = "all"
+PROGRAM_MARKET_1D = "program_market_1d"
+PROGRAM_STOCK_1D = "program_stock_1d"
 
 CANDLE_SCHEMA: dict[str, pl.DataType] = {
     "ts": pl.Datetime("us", "UTC"),
@@ -438,6 +440,35 @@ KR_EVENTS_HISTORY_SCHEMA: dict[str, pl.DataType] = {
     "tier": pl.Utf8(),
     "source": pl.Utf8(),
     "detail": pl.Utf8(),
+}
+
+PROGRAM_MARKET_1D_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "market": pl.Utf8(),
+    "component": pl.Utf8(),
+    "sell_qty": pl.Float64(),
+    "buy_qty": pl.Float64(),
+    "net_qty": pl.Float64(),
+    "sell_value": pl.Float64(),
+    "buy_value": pl.Float64(),
+    "net_value": pl.Float64(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+PROGRAM_STOCK_1D_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "close": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "volume": pl.Float64(),
+    "value": pl.Float64(),
+    "sell_qty": pl.Float64(),
+    "buy_qty": pl.Float64(),
+    "net_qty": pl.Float64(),
+    "sell_value": pl.Float64(),
+    "buy_value": pl.Float64(),
+    "net_value": pl.Float64(),
+    "fetched_at": pl.Datetime("us", "UTC"),
 }
 
 US_EARNINGS_SCHEMA: dict[str, pl.DataType] = {

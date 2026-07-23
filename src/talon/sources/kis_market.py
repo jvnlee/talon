@@ -21,6 +21,8 @@ MEMBER_PATH = "/uapi/domestic-stock/v1/quotations/inquire-member"
 MEMBER_TR = "FHKST01010600"
 PROGRAM_TRADE_PATH = "/uapi/domestic-stock/v1/quotations/program-trade-by-stock"
 PROGRAM_TRADE_TR = "FHPPG04650101"
+PROGRAM_DAILY_PATH = "/uapi/domestic-stock/v1/quotations/program-trade-by-stock-daily"
+PROGRAM_DAILY_TR = "FHPPG04650201"
 PROGRAM_MARKET_PATH = "/uapi/domestic-stock/v1/quotations/comp-program-trade-today"
 PROGRAM_MARKET_TR = "FHPPG04600101"
 FRGNMEM_TREND_PATH = "/uapi/domestic-stock/v1/quotations/frgnmem-pchs-trend"
@@ -316,6 +318,45 @@ def fetch_program_trade(client: KisClient, symbol: str) -> dict[str, Any] | None
         "buy_amount": _num(latest.get("whol_smtn_shnu_tr_pbmn")),
         "net_amount": _num(latest.get("whol_smtn_ntby_tr_pbmn")),
     }
+
+
+def fetch_program_daily(client: KisClient, symbol: str, anchor: date) -> list[dict[str, Any]]:
+    payload = client.get(
+        PROGRAM_DAILY_PATH,
+        PROGRAM_DAILY_TR,
+        {
+            "FID_COND_MRKT_DIV_CODE": KRX_ONLY,
+            "FID_INPUT_ISCD": symbol,
+            "FID_INPUT_DATE_1": anchor.strftime("%Y%m%d"),
+        },
+    )
+    rows = payload.get("output")
+    if not isinstance(rows, list):
+        return []
+    records = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        day = _parse_yyyymmdd(row.get("stck_bsop_date"))
+        if day is None:
+            continue
+        records.append(
+            {
+                "day": day,
+                "symbol": symbol,
+                "close": _num(row.get("stck_clpr")),
+                "change_pct": _num(row.get("prdy_ctrt")),
+                "volume": _num(row.get("acml_vol")),
+                "value": _num(row.get("acml_tr_pbmn")),
+                "sell_qty": _num(row.get("whol_smtn_seln_vol")),
+                "buy_qty": _num(row.get("whol_smtn_shnu_vol")),
+                "net_qty": _num(row.get("whol_smtn_ntby_qty")),
+                "sell_value": _num(row.get("whol_smtn_seln_tr_pbmn")),
+                "buy_value": _num(row.get("whol_smtn_shnu_tr_pbmn")),
+                "net_value": _num(row.get("whol_smtn_ntby_tr_pbmn")),
+            }
+        )
+    return records
 
 
 def fetch_program_market(client: KisClient, market: str) -> list[dict[str, Any]]:
