@@ -252,7 +252,8 @@ def test_verify_clean(snapshots, series, cal):
     days = [date(2026, 7, 13), date(2026, 7, 14), date(2026, 7, 15), date(2026, 7, 16)]
     _seed_sessions(snapshots, days)
     us_daily(series, "^GSPC", [date(2026, 7, 10), *days], 7500.0)
-    us_daily(series, "^IXIC", [date(2026, 7, 10), *days], 7500.0)
+    us_daily(series, "^NDX", [date(2026, 7, 10), *days], 7500.0)
+    us_daily(series, "^IXIC", [date(2026, 7, 10), *days], 6400.0)
     report = verify_usfut(snapshots=snapshots, series=series, cal=cal)
     assert report.status == "ok"
     assert report.symbols == {"US500": 4, "USTEC": 4}
@@ -283,6 +284,27 @@ def test_verify_flags_level_band_violation(snapshots, series, cal):
     days = [date(2026, 7, 13), date(2026, 7, 14)]
     _seed_sessions(snapshots, days, price=7500.0)
     us_daily(series, "^GSPC", [date(2026, 7, 10), *days], 5000.0)
+    report = verify_usfut(snapshots=snapshots, series=series, cal=cal)
+    assert report.status == "issues"
+    assert report.level_violations == 2
+    assert report.examples
+
+
+def test_verify_ignores_composite_index_for_ustec(snapshots, series, cal):
+    days = [date(2026, 7, 13), date(2026, 7, 14)]
+    _seed_sessions(snapshots, days, price=29700.0)
+    us_daily(series, "^GSPC", [date(2026, 7, 10), *days], 29700.0)
+    us_daily(series, "^IXIC", [date(2026, 7, 10), *days], 25690.0)
+    report = verify_usfut(snapshots=snapshots, series=series, cal=cal)
+    assert report.status == "ok"
+    assert report.level_checked == 2
+    assert report.level_violations == 0
+
+
+def test_verify_flags_ustec_against_nasdaq_100(snapshots, series, cal):
+    days = [date(2026, 7, 13), date(2026, 7, 14)]
+    _seed_sessions(snapshots, days, price=29700.0)
+    us_daily(series, "^NDX", [date(2026, 7, 10), *days], 25690.0)
     report = verify_usfut(snapshots=snapshots, series=series, cal=cal)
     assert report.status == "issues"
     assert report.level_violations == 2
