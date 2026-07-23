@@ -429,6 +429,27 @@ def test_eod_kis_minutes_error_is_captured(
     assert summary.steps["kis_minutes"] == "error: 분봉 실패"
 
 
+def test_eod_records_kr_events_step(cfg, cal, state, snapshots, series, alerter, sources):
+    from talon.data.store import KR_EVENTS_HISTORY, KR_EVENTS_HISTORY_NAME
+
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert "snapshot" in summary.steps["kr_events"]
+    assert "history" in summary.steps["kr_events"]
+    assert series.read(KR_EVENTS_HISTORY, KR_EVENTS_HISTORY_NAME) is not None
+
+
+def test_eod_kr_events_error_is_captured(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    def boom(*a, **k):
+        raise SourceError("캘린더 실패")
+
+    monkeypatch.setattr("talon.ingest.eod.daily_kr_events", boom)
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.status == "ok"
+    assert summary.steps["kr_events"] == "error: 캘린더 실패"
+
+
 def test_eod_skips_vkospi_without_krx_login(
     cfg, cal, state, snapshots, series, alerter, sources
 ):
