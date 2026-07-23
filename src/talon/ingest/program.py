@@ -200,6 +200,23 @@ def _write_by_day(
     return days, rows
 
 
+def _drop_unpublished_today(
+    results: list[tuple[str, list[dict[str, Any]], datetime]], anchor: date
+) -> list[tuple[str, list[dict[str, Any]], datetime]]:
+    return [
+        (
+            symbol,
+            [
+                record
+                for record in records
+                if record["day"] != anchor or record["net_value"] is not None
+            ],
+            stamp,
+        )
+        for symbol, records, stamp in results
+    ]
+
+
 def _run_daily_stock(
     cfg: TalonSettings,
     snapshots: DatePartitionedStore,
@@ -214,7 +231,7 @@ def _run_daily_stock(
         max_failure_ratio=cfg.collect_failure_ratio,
         log_name="program-stock",
     )
-    days, rows = _write_by_day(snapshots, results)
+    days, rows = _write_by_day(snapshots, _drop_unpublished_today(results, anchor))
     result = f"{days} days, {rows} rows"
     if failed:
         result += f", {failed} failed"
@@ -242,10 +259,9 @@ def daily_program_stock(
 
 
 def _walkback_symbol(
-    fetch: StockFetcher, cal: KrxCalendar, symbol: str, start: date, end: date
+    fetch: StockFetcher, cal: KrxCalendar, symbol: str, start: date, end: date, anchor: date
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    anchor = end
     seen_min: date | None = None
     while anchor >= start:
         page = fetch(symbol, anchor)
@@ -264,17 +280,36 @@ def _walkback_symbol(
     return records
 
 
-def _resume_symbols(
-    snapshots: DatePartitionedStore, symbols: list[str], start: date
-) -> list[str]:
+def _resume_anchors(
+    snapshots: DatePartitionedStore,
+    cal: KrxCalendar,
+    symbols: list[str],
+    start: date,
+    end: date,
+) -> tuple[list[tuple[str, date]], int]:
     scan = snapshots.scan(PROGRAM_STOCK_1D)
-    if scan is None:
-        return list(symbols)
-    covered = scan.group_by("symbol").agg(pl.col("day").min().alias("min_day")).collect()
-    done = set(
-        covered.filter(pl.col("min_day") <= start).get_column("symbol").to_list()
-    )
-    return [symbol for symbol in symbols if symbol not in done]
+    mins: dict[str, date] = {}
+    if scan is not None:
+        covered = scan.group_by("symbol").agg(pl.col("day").min().alias("min_day")).collect()
+        mins = dict(
+            zip(
+                covered.get_column("symbol").to_list(),
+                covered.get_column("min_day").to_list(),
+                strict=True,
+            )
+        )
+    pending: list[tuple[str, date]] = []
+    skipped = 0
+    for symbol in symbols:
+        stored_min = mins.get(symbol)
+        if stored_min is not None and stored_min <= start:
+            skipped += 1
+            continue
+        if stored_min is None:
+            pending.append((symbol, end))
+        else:
+            pending.append((symbol, min(cal.previous_trading_day(stored_min), end)))
+    return pending, skipped
 
 
 def backfill_program_stock(
@@ -290,16 +325,15 @@ def backfill_program_stock(
 ) -> BackfillSummary:
     run_id = state.start_job("backfill-program-stock")
     targets = symbols if symbols is not None else _universe_symbols(snapshots, end)
-    remaining = _resume_symbols(snapshots, targets, start)
-    resume_skipped = len(targets) - len(remaining)
+    pending, resume_skipped = _resume_anchors(snapshots, cal, targets, start, end)
     if fetch is None:
         with build_kis_client(cfg) as client:
             summary = _run_stock_backfill(
-                cfg, cal, snapshots, remaining, start, end, _bind_stock(client), resume_skipped
+                cfg, cal, snapshots, pending, start, end, _bind_stock(client), resume_skipped
             )
     else:
         summary = _run_stock_backfill(
-            cfg, cal, snapshots, remaining, start, end, fetch, resume_skipped
+            cfg, cal, snapshots, pending, start, end, fetch, resume_skipped
         )
     state.finish_job(run_id, summary.status == "ok", summary.model_dump(mode="json"))
     return summary
@@ -309,17 +343,18 @@ def _run_stock_backfill(
     cfg: TalonSettings,
     cal: KrxCalendar,
     snapshots: DatePartitionedStore,
-    symbols: list[str],
+    pending: list[tuple[str, date]],
     start: date,
     end: date,
     fetch: StockFetcher,
     resume_skipped: int,
 ) -> BackfillSummary:
+    anchors = dict(pending)
     aborted = False
     try:
         results, _failed = parallel_fetch(
-            symbols,
-            lambda symbol: _walkback_symbol(fetch, cal, symbol, start, end),
+            [symbol for symbol, _ in pending],
+            lambda symbol: _walkback_symbol(fetch, cal, symbol, start, end, anchors[symbol]),
             workers=cfg.kis_workers,
             max_failure_ratio=cfg.collect_failure_ratio,
             log_name="program-stock-backfill",
