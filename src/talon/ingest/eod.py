@@ -21,6 +21,7 @@ from talon.data.store import (
 )
 from talon.errors import SourceError
 from talon.ingest.actions import daily_actions
+from talon.ingest.credit import daily_credit
 from talon.ingest.dart_times import daily_dart_times
 from talon.ingest.flows import daily_flows
 from talon.ingest.kis_minutes import daily_kis_minutes
@@ -120,6 +121,7 @@ def _run_eod_steps(
     _load_shorting(cfg, cal, snapshots, steps)
     _load_market_actions(cfg, cal, snapshots, steps)
     _load_kr_events(cfg, cal, snapshots, series, day, steps)
+    _load_credit(cfg, snapshots, steps)
     _load_kis_minutes(cfg, cal, snapshots, steps)
     _load_usfut(cfg, snapshots, steps)
     _load_dart_times(cfg, cal, snapshots, steps)
@@ -420,6 +422,21 @@ def _load_kr_events(
     except Exception as exc:
         steps["kr_events"] = f"error: {exc}"
         log.warning("kr events errors: %s", exc)
+
+
+def _load_credit(
+    cfg: TalonSettings,
+    snapshots: DatePartitionedStore,
+    steps: dict[str, str],
+) -> None:
+    if not cfg.kis_configured:
+        steps["credit"] = "skipped-no-kis-key"
+        return
+    try:
+        steps["credit"] = daily_credit(cfg, snapshots=snapshots)
+    except Exception as exc:
+        steps["credit"] = f"error: {exc}"
+        log.warning("credit errors: %s", exc)
 
 
 def _load_kis_minutes(

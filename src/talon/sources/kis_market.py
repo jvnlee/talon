@@ -35,11 +35,39 @@ OVERSEAS_INDEX_PATH = "/uapi/overseas-price/v1/quotations/inquire-daily-chartpri
 OVERSEAS_INDEX_TR = "FHKST03030100"
 MINUTE_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
 MINUTE_CHART_TR = "FHKST03010230"
+CREDIT_DAILY_PATH = "/uapi/domestic-stock/v1/quotations/daily-credit-balance"
+CREDIT_DAILY_TR = "FHPST04760000"
+CREDIT_SCREEN = "20476"
 
 RANKING_SIDES = {"buy": "0", "sell": "1"}
 OVERTIME_RANKING_SIDES = {"up": "2", "down": "5"}
 MEMBER_SIDES = {"sell": "seln", "buy": "shnu"}
 FRGNMEM_TREND_PARTNER = "99999"
+
+CREDIT_NUM_FIELDS: dict[str, str] = {
+    "close": "stck_prpr",
+    "open": "stck_oprc",
+    "high": "stck_hgpr",
+    "low": "stck_lwpr",
+    "change_pct": "prdy_ctrt",
+    "volume": "acml_vol",
+    "loan_new_qty": "whol_loan_new_stcn",
+    "loan_repay_qty": "whol_loan_rdmp_stcn",
+    "loan_balance_qty": "whol_loan_rmnd_stcn",
+    "loan_new_amt": "whol_loan_new_amt",
+    "loan_repay_amt": "whol_loan_rdmp_amt",
+    "loan_balance_amt": "whol_loan_rmnd_amt",
+    "loan_balance_rate": "whol_loan_rmnd_rate",
+    "loan_give_rate": "whol_loan_gvrt",
+    "short_new_qty": "whol_stln_new_stcn",
+    "short_repay_qty": "whol_stln_rdmp_stcn",
+    "short_balance_qty": "whol_stln_rmnd_stcn",
+    "short_new_amt": "whol_stln_new_amt",
+    "short_repay_amt": "whol_stln_rdmp_amt",
+    "short_balance_amt": "whol_stln_rmnd_amt",
+    "short_balance_rate": "whol_stln_rmnd_rate",
+    "short_give_rate": "whol_stln_gvrt",
+}
 
 
 def _num(value: Any) -> float | None:
@@ -589,3 +617,31 @@ def fetch_minute_chart(
             break
         cursor = _decrement_minute(oldest)
     return [rows[key] for key in sorted(rows)]
+
+
+def fetch_credit_daily(client: KisClient, symbol: str, anchor: date) -> list[dict[str, Any]]:
+    payload = client.get(
+        CREDIT_DAILY_PATH,
+        CREDIT_DAILY_TR,
+        {
+            "FID_COND_MRKT_DIV_CODE": KRX_ONLY,
+            "FID_COND_SCR_DIV_CODE": CREDIT_SCREEN,
+            "FID_INPUT_ISCD": symbol,
+            "FID_INPUT_DATE_1": anchor.strftime("%Y%m%d"),
+        },
+    )
+    rows = payload.get("output")
+    if not isinstance(rows, list):
+        return []
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        day = _parse_yyyymmdd(row.get("deal_date"))
+        if day is None:
+            continue
+        record: dict[str, Any] = {"day": day, "settle_day": _parse_yyyymmdd(row.get("stlm_date"))}
+        for field, key in CREDIT_NUM_FIELDS.items():
+            record[field] = _num(row.get(key))
+        records.append(record)
+    return records

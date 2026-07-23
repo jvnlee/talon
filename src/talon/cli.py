@@ -60,6 +60,7 @@ from talon.ingest.actions import (
 from talon.ingest.briefing import run_briefing_snapshot
 from talon.ingest.close_auction import run_close_auction
 from talon.ingest.collect import bootstrap_universe, run_collect
+from talon.ingest.credit import backfill_credit, daily_credit, verify_credit
 from talon.ingest.dart_times import (
     BACKFILL_START as DART_TIMES_START,
 )
@@ -1028,6 +1029,82 @@ def kis_minutes_verify(start_text: str | None, end_text: str | None, symbols_sam
             symbols_sample=symbols_sample,
         )
     click.echo(report.model_dump_json(indent=2))
+
+
+@main.group()
+def credit() -> None:
+    """KIS 종목별 신용융자·대주 잔고 (일별, 관측 T+3)."""
+
+
+@credit.command("backfill")
+@click.option("--start", "start_text", default="2016-01-04", show_default=True, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+@click.option("--symbol", "symbols", multiple=True, help="재개용 종목 부분집합")
+@click.option("--rps", type=float, default=None, help="KIS 초당 호출 수 상한")
+def credit_backfill(
+    start_text: str, end_text: str | None, symbols: tuple[str, ...], rps: float | None
+) -> None:
+    cfg = load_settings()
+    if not cfg.kis_configured:
+        raise click.ClickException("TALON_KIS_APP_KEY / TALON_KIS_APP_SECRET 설정이 필요합니다")
+    if rps is not None:
+        cfg = cfg.model_copy(update={"kis_rps": rps})
+    with job_lock(cfg.locks_dir / "credit-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("credit backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            start = date.fromisoformat(start_text)
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if end < start:
+                raise click.ClickException("종료일이 시작일보다 빠릅니다")
+
+            def report(index: int, total: int, symbol: str) -> None:
+                if index % 100 == 0 or index == total:
+                    click.echo(f"{index}/{total} {symbol}")
+
+            summary = backfill_credit(
+                cfg,
+                state=rt.state,
+                snapshots=rt.snapshots,
+                start=start,
+                end=end,
+                symbols=list(symbols) or None,
+                progress=report,
+            )
+    click.echo(summary.model_dump_json())
+
+
+@credit.command("daily")
+def credit_daily() -> None:
+    cfg = load_settings()
+    if not cfg.kis_configured:
+        raise click.ClickException("TALON_KIS_APP_KEY / TALON_KIS_APP_SECRET 설정이 필요합니다")
+    with job_lock(cfg.locks_dir / "credit-daily.lock") as acquired:
+        if not acquired:
+            click.echo("credit daily가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            result = daily_credit(cfg, snapshots=rt.snapshots)
+    click.echo(result)
+
+
+@credit.command("verify")
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def credit_verify(start_text: str | None, end_text: str | None) -> None:
+    cfg = load_settings()
+    start = date.fromisoformat(start_text) if start_text else None
+    end = date.fromisoformat(end_text) if end_text else None
+    with runtime(cfg, toss="skip") as rt:
+        report = verify_credit(cfg, snapshots=rt.snapshots, start=start, end=end)
+    click.echo(report.model_dump_json(indent=2))
+    if report.status not in {"ok", "empty"}:
+        sys.exit(1)
 
 
 @main.group()

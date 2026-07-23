@@ -337,6 +337,32 @@ class KisMinutesVerifyReport(BaseModel):
     examples: list[str] = []
 
 
+class CreditBackfillSummary(BaseModel):
+    status: str
+    symbols: int = 0
+    days: int = 0
+    rows: int = 0
+    failed: int = 0
+
+
+class CreditVerifyReport(BaseModel):
+    status: str
+    days: int = 0
+    rows: int = 0
+    symbols: int = 0
+    first_day: date | None = None
+    last_day: date | None = None
+    continuity_checked: int = 0
+    continuity_ok: int = 0
+    continuity_ratio: float | None = None
+    negative_balances: int = 0
+    gvrt_checked: int = 0
+    gvrt_mismatches: int = 0
+    settle_violations: int = 0
+    duplicate_keys: int = 0
+    examples: list[str] = []
+
+
 class ShortingVerifyReport(BaseModel):
     status: str
     trade_days: int = 0

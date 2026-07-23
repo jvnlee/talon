@@ -47,6 +47,7 @@ SHORTING = "shorting_1d"
 SHORTING_BALANCE = "shorting_balance_1d"
 SHORTING_INVESTOR = "shorting_investor_1d"
 KIS_MINUTES = "kis_minutes_1m"
+CREDIT_BALANCE = "credit_balance_1d"
 STOCK_INFO = "stock_info"
 DELISTING = "delisting"
 DART_FILINGS = "dart_filings"
@@ -553,6 +554,35 @@ KIS_MINUTES_SCHEMA: dict[str, pl.DataType] = {
     "close": pl.Float64(),
     "volume": pl.Float64(),
     "cum_value": pl.Float64(),
+    "fetched_at": pl.Datetime("us", "UTC"),
+}
+
+CREDIT_BALANCE_1D_SCHEMA: dict[str, pl.DataType] = {
+    "day": pl.Date(),
+    "symbol": pl.Utf8(),
+    "settle_day": pl.Date(),
+    "close": pl.Float64(),
+    "open": pl.Float64(),
+    "high": pl.Float64(),
+    "low": pl.Float64(),
+    "change_pct": pl.Float64(),
+    "volume": pl.Float64(),
+    "loan_new_qty": pl.Float64(),
+    "loan_repay_qty": pl.Float64(),
+    "loan_balance_qty": pl.Float64(),
+    "loan_new_amt": pl.Float64(),
+    "loan_repay_amt": pl.Float64(),
+    "loan_balance_amt": pl.Float64(),
+    "loan_balance_rate": pl.Float64(),
+    "loan_give_rate": pl.Float64(),
+    "short_new_qty": pl.Float64(),
+    "short_repay_qty": pl.Float64(),
+    "short_balance_qty": pl.Float64(),
+    "short_new_amt": pl.Float64(),
+    "short_repay_amt": pl.Float64(),
+    "short_balance_amt": pl.Float64(),
+    "short_balance_rate": pl.Float64(),
+    "short_give_rate": pl.Float64(),
     "fetched_at": pl.Datetime("us", "UTC"),
 }
 
