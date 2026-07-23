@@ -33,7 +33,7 @@ MISSING_STREAK_LIMIT = 14
 DAILY_LOOKBACK_DAYS = 7
 PACING_SECONDS = 0.3
 LEVEL_BAND = 0.07
-LEVEL_INDEX: dict[str, str] = {"US500": "^GSPC", "USTEC": "^IXIC"}
+LEVEL_INDEX: dict[str, str] = {"US500": "^GSPC", "USTEC": "^NDX"}
 
 DukascopyFetcher = Callable[[str, date], "list[DukascopyBar] | None"]
 

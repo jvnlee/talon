@@ -21,6 +21,7 @@ INDICATOR_SYMBOLS = (
 US_EOD_SYMBOLS = (
     "^GSPC",
     "^IXIC",
+    "^NDX",
     "^SOX",
     "^DJI",
     "^RUT",
