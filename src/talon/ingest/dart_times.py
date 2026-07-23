@@ -14,6 +14,7 @@ from talon.data.store import (
     DatePartitionedStore,
 )
 from talon.errors import SourceError
+from talon.markets.kr import KrxCalendar
 from talon.models import (
     DartTimesBackfillSummary,
     DartTimesDailySummary,
@@ -30,7 +31,7 @@ log = logging.getLogger(__name__)
 
 JOB = "dart-times"
 BACKFILL_START = date(2016, 7, 1)
-DAILY_SELF_HEAL_DAYS = 7
+DAILY_SELF_HEAL_SESSIONS = 7
 MAX_CONSECUTIVE_FAILURES = 3
 SOURCE = "dart_web"
 
@@ -138,19 +139,21 @@ def backfill_dart_times(
 def daily_dart_times(
     cfg: TalonSettings,
     *,
+    cal: KrxCalendar,
     snapshots: DatePartitionedStore,
     today: date | None = None,
     fetch: DayFetcher | None = None,
     sleep: Callable[[float], None] = time_module.sleep,
     now: Callable[[], datetime] = now_utc,
-    lookback_days: int = DAILY_SELF_HEAL_DAYS,
+    lookback_sessions: int = DAILY_SELF_HEAL_SESSIONS,
 ) -> DartTimesDailySummary:
     moment = now()
     day_today = today if today is not None else moment.astimezone(KST).date()
     if fetch is None:
         fetch = _default_fetcher(sleep)
-    window = [day_today - timedelta(days=offset) for offset in range(lookback_days)]
-    days = sorted(day for day in window if day >= DART_WEB_HORIZON)
+    end = cal.latest_trading_day(day_today)
+    span = cal.sessions_between(end - timedelta(days=lookback_sessions * 2 + 7), end)
+    days = [day for day in span[-lookback_sessions:] if day >= DART_WEB_HORIZON]
     written = 0
     failed: list[str] = []
     for day in days:

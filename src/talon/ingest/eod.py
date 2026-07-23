@@ -122,7 +122,7 @@ def _run_eod_steps(
     _load_kr_events(cfg, cal, snapshots, series, day, steps)
     _load_kis_minutes(cfg, cal, snapshots, steps)
     _load_usfut(cfg, snapshots, steps)
-    _load_dart_times(cfg, snapshots, steps)
+    _load_dart_times(cfg, cal, snapshots, steps)
     if source == "pykrx":
         _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
     else:
@@ -455,11 +455,12 @@ def _load_usfut(
 
 def _load_dart_times(
     cfg: TalonSettings,
+    cal: KrxCalendar,
     snapshots: DatePartitionedStore,
     steps: dict[str, str],
 ) -> None:
     try:
-        summary = daily_dart_times(cfg, snapshots=snapshots)
+        summary = daily_dart_times(cfg, cal=cal, snapshots=snapshots)
         detail = f"{summary.days} days, {summary.rows} rows"
         if summary.failed:
             detail += f", failed {len(summary.failed)}"

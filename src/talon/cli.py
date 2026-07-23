@@ -1143,7 +1143,7 @@ def dart_times_daily() -> None:
             click.echo("dart-times daily가 이미 실행 중입니다")
             return
         with runtime(cfg, toss="skip") as rt:
-            summary = daily_dart_times(cfg, snapshots=rt.snapshots)
+            summary = daily_dart_times(cfg, cal=rt.cal, snapshots=rt.snapshots)
     click.echo(summary.model_dump_json())
 
 
