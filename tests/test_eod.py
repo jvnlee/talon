@@ -19,7 +19,7 @@ from talon.data.store import (
 )
 from talon.errors import SourceError
 from talon.ingest.eod import run_eod
-from talon.models import CandlePage, InvestorFlowRecord
+from talon.models import CandlePage, DartTimesDailySummary, InvestorFlowRecord
 from talon.sources.crosscheck import CrosscheckResult, Discrepancy
 
 DAY = date(2026, 7, 10)
@@ -122,6 +122,14 @@ def sources(monkeypatch, snapshots):
     )
     monkeypatch.setattr("talon.ingest.universe.fetch_admin_issues", set)
     write_stock_info(snapshots, [PREV_DAY], ["005930", "000660"])
+
+
+@pytest.fixture(autouse=True)
+def _stub_dart_times(monkeypatch):
+    monkeypatch.setattr(
+        "talon.ingest.eod.daily_dart_times",
+        lambda cfg, **k: DartTimesDailySummary(status="ok"),
+    )
 
 
 def run(cfg, cal, state, snapshots, series, alerter, *, toss=None, day=DAY, force=False):
