@@ -1,8 +1,10 @@
 import bisect
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
+from functools import partial
 
 import polars as pl
 
@@ -19,6 +21,7 @@ from talon.models import UsFutBackfillSummary, UsFutVerifyReport
 from talon.sources.dukascopy import (
     DukascopyBar,
     ProxyBar,
+    build_client,
     fetch_1510_bars,
     select_1510_bar,
 )
@@ -38,8 +41,13 @@ LEVEL_INDEX: dict[str, str] = {"US500": "^GSPC", "USTEC": "^NDX"}
 DukascopyFetcher = Callable[[str, date], "list[DukascopyBar] | None"]
 
 
-def _default_fetch(symbol: str, day: date) -> list[DukascopyBar] | None:
-    return fetch_1510_bars(symbol, day)
+@contextmanager
+def _shared_fetch(fetch: DukascopyFetcher | None) -> Iterator[DukascopyFetcher]:
+    if fetch is not None:
+        yield fetch
+        return
+    with build_client() as client:
+        yield partial(fetch_1510_bars, client=client)
 
 
 def _weekdays(start: date, end: date) -> list[date]:
@@ -114,8 +122,6 @@ def backfill_usfut(
     pause: float = PACING_SECONDS,
     progress: Callable[[int, int, date], None] | None = None,
 ) -> UsFutBackfillSummary:
-    if fetch is None:
-        fetch = _default_fetch
     fetched_at = now or now_utc()
     days = _weekdays(start, end)
     total = len(days)
@@ -126,45 +132,46 @@ def backfill_usfut(
     unavailable_days = 0
     failed: list[str] = []
     unavailable: list[date] = []
-    for index, day in enumerate(days, start=1):
-        stored = _stored_symbols(snapshots, day)
-        if set(SYMBOLS) <= stored:
-            skipped_days += 1
+    with _shared_fetch(fetch) as fetch_fn:
+        for index, day in enumerate(days, start=1):
+            stored = _stored_symbols(snapshots, day)
+            if set(SYMBOLS) <= stored:
+                skipped_days += 1
+                if progress is not None:
+                    progress(index, total, day)
+                continue
+            records: list[dict[str, object]] = []
+            available = False
+            day_failed = False
+            for symbol in SYMBOLS:
+                if symbol in stored:
+                    available = True
+                    continue
+                try:
+                    bars = fetch_fn(symbol, day)
+                except SourceError as exc:
+                    failed.append(f"{day.isoformat()} {symbol}")
+                    day_failed = True
+                    log.warning("usfut backfill failed for %s %s: %s", day, symbol, exc)
+                    continue
+                if bars is None:
+                    continue
+                available = True
+                bar = select_1510_bar(bars, day)
+                if bar is not None:
+                    records.append(_row(day, symbol, bar, fetched_at))
+            if records:
+                rows += _write_day(snapshots, day, records)
+                loaded_days += 1
+            elif available and not day_failed:
+                stale_days += 1
+            if not available and not day_failed:
+                unavailable_days += 1
+                unavailable.append(day)
+            if pause:
+                sleep(pause)
             if progress is not None:
                 progress(index, total, day)
-            continue
-        records: list[dict[str, object]] = []
-        available = False
-        day_failed = False
-        for symbol in SYMBOLS:
-            if symbol in stored:
-                available = True
-                continue
-            try:
-                bars = fetch(symbol, day)
-            except SourceError as exc:
-                failed.append(f"{day.isoformat()} {symbol}")
-                day_failed = True
-                log.warning("usfut backfill failed for %s %s: %s", day, symbol, exc)
-                continue
-            if bars is None:
-                continue
-            available = True
-            bar = select_1510_bar(bars, day)
-            if bar is not None:
-                records.append(_row(day, symbol, bar, fetched_at))
-        if records:
-            rows += _write_day(snapshots, day, records)
-            loaded_days += 1
-        elif available and not day_failed:
-            stale_days += 1
-        if not available and not day_failed:
-            unavailable_days += 1
-            unavailable.append(day)
-        if pause:
-            sleep(pause)
-        if progress is not None:
-            progress(index, total, day)
     status = "partial" if failed else "ok"
     return UsFutBackfillSummary(
         status=status,
@@ -193,38 +200,37 @@ def daily_usfut(
     pending = [day for day in recent if not set(SYMBOLS) <= _stored_symbols(snapshots, day)]
     if not pending:
         return "up-to-date"
-    if fetch is None:
-        fetch = _default_fetch
     fetched_at = now or now_utc()
     done = 0
     not_ready = 0
     errors = 0
-    for day in pending:
-        stored = _stored_symbols(snapshots, day)
-        records: list[dict[str, object]] = []
-        symbol_missing = False
-        for symbol in SYMBOLS:
-            if symbol in stored:
-                continue
-            try:
-                bars = fetch(symbol, day)
-            except SourceError as exc:
-                errors += 1
-                log.warning("daily usfut failed for %s %s: %s", day, symbol, exc)
-                continue
-            if bars is None:
-                symbol_missing = True
-                continue
-            bar = select_1510_bar(bars, day)
-            if bar is not None:
-                records.append(_row(day, symbol, bar, fetched_at))
-        if records:
-            _write_day(snapshots, day, records)
-            done += 1
-        elif symbol_missing:
-            not_ready += 1
-        if pause:
-            sleep(pause)
+    with _shared_fetch(fetch) as fetch_fn:
+        for day in pending:
+            stored = _stored_symbols(snapshots, day)
+            records: list[dict[str, object]] = []
+            symbol_missing = False
+            for symbol in SYMBOLS:
+                if symbol in stored:
+                    continue
+                try:
+                    bars = fetch_fn(symbol, day)
+                except SourceError as exc:
+                    errors += 1
+                    log.warning("daily usfut failed for %s %s: %s", day, symbol, exc)
+                    continue
+                if bars is None:
+                    symbol_missing = True
+                    continue
+                bar = select_1510_bar(bars, day)
+                if bar is not None:
+                    records.append(_row(day, symbol, bar, fetched_at))
+            if records:
+                _write_day(snapshots, day, records)
+                done += 1
+            elif symbol_missing:
+                not_ready += 1
+            if pause:
+                sleep(pause)
     result = f"{done}/{len(pending)} days"
     if not_ready:
         result += f", not-ready {not_ready}"

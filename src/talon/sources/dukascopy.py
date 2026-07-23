@@ -97,6 +97,10 @@ def select_1510_bar(bars: list[DukascopyBar], day: date) -> ProxyBar | None:
     return None
 
 
+def build_client(timeout: float = 30.0) -> httpx.Client:
+    return httpx.Client(timeout=timeout, follow_redirects=True)
+
+
 def fetch_day_file(
     symbol_code: str,
     day: date,
@@ -106,14 +110,18 @@ def fetch_day_file(
     transport: httpx.BaseTransport | None = None,
     retries: int = 3,
     sleep: Callable[[float], None] = time.sleep,
+    client: httpx.Client | None = None,
 ) -> bytes | None:
     url = day_file_url(symbol_code, day, side)
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            with httpx.Client(
-                timeout=timeout, transport=transport, follow_redirects=True
-            ) as client:
+            if client is None:
+                with httpx.Client(
+                    timeout=timeout, transport=transport, follow_redirects=True
+                ) as owned:
+                    response = owned.get(url, headers={"User-Agent": USER_AGENT})
+            else:
                 response = client.get(url, headers={"User-Agent": USER_AGENT})
         except httpx.HTTPError as exc:
             last_error = exc
@@ -142,12 +150,20 @@ def fetch_1510_bars(
     transport: httpx.BaseTransport | None = None,
     retries: int = 3,
     sleep: Callable[[float], None] = time.sleep,
+    client: httpx.Client | None = None,
 ) -> list[DukascopyBar] | None:
     code = SYMBOL_CODES.get(symbol)
     if code is None:
         raise SourceError(f"알 수 없는 Dukascopy 심볼: {symbol}")
     payload = fetch_day_file(
-        code, day, side=side, timeout=timeout, transport=transport, retries=retries, sleep=sleep
+        code,
+        day,
+        side=side,
+        timeout=timeout,
+        transport=transport,
+        retries=retries,
+        sleep=sleep,
+        client=client,
     )
     if payload is None:
         return None
