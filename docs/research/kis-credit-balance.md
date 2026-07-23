@@ -86,6 +86,7 @@
 
 - **규모**: ~2,800종목 × 종목당 ~104콜(2016~2026, 보폭 35일) ≈ **29만 콜.** 8rps 페이서로 ~10시간. **미실행 — 사용자 결정 대기.**
 - **백필**: `talon credit backfill [--start 2016-01-04] [--end 전거래일] [--symbol 부분집합] [--rps]`. 종목당 고정 보폭 −35일 워크백, 페이지 0행이거나 앵커<하한이면 종목 종료. `parallel_fetch` 8workers·실패율 20% 중단. 재개는 `--symbol` 부분집합으로. 하한은 `max(start, 2016-01-04)`로 클램프. 결과는 day별 그룹핑 후 **파티션당 1회 upsert**(멱등).
+- **유니버스 = 현재 상장(latest `stock_info`) ∪ 하한 이후 상장폐지 종목**(`delisting` 레지스트리에서 `delisting_date >= max(start, 2016-01-04)`). latest 스냅샷만 쓰면 다년 백필에 생존편향(퇴출·실패 종목 누락)이 박히므로 폐지 종목을 합집합해 PIT를 근사한다. 레지스트리 부재 시 현재 상장분으로만 폴백. `--symbol` 지정 시에는 그 부분집합만.
 - **전방 수집**: eod 잡에 `credit` 스텝 부착(`_load_kr_events` 다음). 종목당 1콜(앵커=오늘) → 30세션 창을 day별로 그룹핑해 결손 파티션만 upsert. KIS 키 없으면 `skipped-no-kis-key`, 실패 격리. 신규 launchd 잡 없음. 수동: `talon credit daily`.
 - **검증**: `talon credit verify [--start] [--end]` — 오프라인 저장분 검사, `status` not in {ok, empty}이면 exit 1.
 
