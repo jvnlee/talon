@@ -39,6 +39,17 @@ _ROW = """
 
 _NO_DATA_ROW = '<tr><td colspan="6" class="tC">조회된 데이타가 없습니다.</td></tr>'
 
+_ROW_NO_REPORT = """
+<tr>
+    <td>13:05</td>
+    <td class="tL"><span>철회공시</span></td>
+    <td class="tL"><span>보고서 링크 없음</span></td>
+    <td class="tL ellipsis" title="제출인">제출인</td>
+    <td>2023.06.01</td>
+    <td></td>
+</tr>
+"""
+
 
 def _page(rows_html: str, total: int, *, header: bool = True, total_input: bool = True) -> str:
     header_row = (
@@ -78,8 +89,9 @@ def test_parse_extracts_fields():
         + _row("20230601000431", time="17:21", corp="메디앙스", title="대량보유상황보고서"),
         total=2,
     )
-    rows, total = parse_disclosure_page(html)
+    rows, total, raw_count = parse_disclosure_page(html)
     assert total == 2
+    assert raw_count == 2
     assert [r.rcept_no for r in rows] == ["20230601900642", "20230601000431"]
     assert [r.received_time for r in rows] == ["19:34", "17:21"]
     assert [r.corp_name for r in rows] == ["알에프세미", "메디앙스"]
@@ -87,7 +99,7 @@ def test_parse_extracts_fields():
 
 
 def test_parse_empty_day_is_not_drift():
-    rows, total = parse_disclosure_page(_page(_NO_DATA_ROW, total=0))
+    rows, total, _raw = parse_disclosure_page(_page(_NO_DATA_ROW, total=0))
     assert rows == []
     assert total == 0
 
@@ -166,6 +178,18 @@ def test_fetch_stops_on_short_first_page():
     )
     assert len(rows) == 1
     assert max(seen_pages) == 1
+
+
+def test_fetch_continues_when_full_page_drops_a_row():
+    page1_ids = [f"202306010000{i:02d}" for i in range(ROWS_PER_PAGE - 1)]
+    page2_ids = [f"202306010001{i:02d}" for i in range(50)]
+    pages = {
+        ("mainAll", 1): _page(_rows(page1_ids) + _ROW_NO_REPORT, total=150),
+        ("mainAll", 2): _page(_rows(page2_ids), total=150),
+        ("mainO", 1): _page(_NO_DATA_ROW, total=0),
+    }
+    rows = fetch_disclosure_day(DAY, transport=_transport(pages), sleep=lambda _s: None)
+    assert len(rows) == 149
 
 
 def test_fetch_propagates_http_error():

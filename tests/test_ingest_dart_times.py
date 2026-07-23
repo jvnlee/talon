@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
 
@@ -8,6 +8,7 @@ from talon.data.store import (
     DART_FILINGS,
 )
 from talon.ingest.dart_times import (
+    DAILY_SELF_HEAL_SESSIONS,
     backfill_dart_times,
     daily_dart_times,
     verify_dart_times,
@@ -109,25 +110,53 @@ def test_backfill_aborts_on_consecutive_failures(cfg, state, snapshots):
     assert len(summary.failed) == 3
 
 
-def test_daily_self_heals_recent_window(cfg, snapshots):
-    days: list[date] = []
+def test_daily_self_heals_recent_sessions(cfg, cal, snapshots):
+    today = date(2026, 7, 23)
+    fetched: list[date] = []
 
     def fetch(day: date) -> list[DisclosureRow]:
-        days.append(day)
+        fetched.append(day)
         return _rows(day, 1)
 
     summary = daily_dart_times(
         cfg,
+        cal=cal,
         snapshots=snapshots,
-        today=date(2026, 7, 23),
+        today=today,
         fetch=fetch,
         now=lambda: NOW,
     )
+    end = cal.latest_trading_day(today)
+    expected = cal.sessions_between(
+        end - timedelta(days=DAILY_SELF_HEAL_SESSIONS * 2 + 7), end
+    )[-DAILY_SELF_HEAL_SESSIONS:]
     assert summary.status == "ok"
-    assert summary.days == 7
-    assert days[0] == date(2026, 7, 17)
-    assert days[-1] == date(2026, 7, 23)
-    assert snapshots.has_date(DART_FILING_TIMES, date(2026, 7, 23))
+    assert summary.days == DAILY_SELF_HEAL_SESSIONS
+    assert fetched == expected
+    assert date(2026, 7, 17) not in fetched
+    assert snapshots.has_date(DART_FILING_TIMES, today)
+
+
+def test_daily_bridges_long_holiday_closure(cfg, cal, snapshots):
+    reopen = date(2017, 10, 10)
+    last_before_closure = date(2017, 9, 29)
+    fetched: list[date] = []
+
+    def fetch(day: date) -> list[DisclosureRow]:
+        fetched.append(day)
+        return _rows(day, 1)
+
+    daily_dart_times(
+        cfg,
+        cal=cal,
+        snapshots=snapshots,
+        today=reopen,
+        fetch=fetch,
+        now=lambda: NOW,
+    )
+    assert (reopen - last_before_closure).days > DAILY_SELF_HEAL_SESSIONS
+    assert last_before_closure in fetched
+    assert snapshots.has_date(DART_FILING_TIMES, last_before_closure)
 
 
 def _seed_times(snapshots, day: date, rows: list[DisclosureRow]) -> None:
