@@ -429,6 +429,33 @@ def test_eod_kis_minutes_error_is_captured(
     assert summary.steps["kis_minutes"] == "error: 분봉 실패"
 
 
+def test_eod_skips_usfut_when_disabled(cfg, cal, state, snapshots, series, alerter, sources):
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["usfut"] == "skipped-disabled"
+
+
+def test_eod_records_usfut_step(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    monkeypatch.setattr("talon.ingest.eod.daily_usfut", lambda **k: "2/2 days")
+    cfg = cfg.model_copy(update={"usfut_enabled": True})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.steps["usfut"] == "2/2 days"
+
+
+def test_eod_usfut_error_is_captured(
+    cfg, cal, state, snapshots, series, alerter, sources, monkeypatch
+):
+    def boom(**k):
+        raise SourceError("프록시 실패")
+
+    monkeypatch.setattr("talon.ingest.eod.daily_usfut", boom)
+    cfg = cfg.model_copy(update={"usfut_enabled": True})
+    summary = run(cfg, cal, state, snapshots, series, alerter, toss=FakeToss())
+    assert summary.status == "ok"
+    assert summary.steps["usfut"] == "error: 프록시 실패"
+
+
 def test_eod_records_kr_events_step(cfg, cal, state, snapshots, series, alerter, sources):
     from talon.data.store import KR_EVENTS_HISTORY, KR_EVENTS_HISTORY_NAME
 

@@ -45,6 +45,14 @@ def test_overtime_command_is_registered():
     assert "overtime" in result.output
 
 
+def test_usfut_group_is_registered():
+    runner = CliRunner()
+    result = runner.invoke(main, ["usfut", "--help"])
+    assert result.exit_code == 0
+    for command in ("backfill", "daily", "verify"):
+        assert command in result.output
+
+
 def test_overtime_exits_nonzero_when_not_ok(tmp_path, monkeypatch, cfg):
     import json
     from datetime import date
