@@ -51,6 +51,24 @@ def _universe_symbols(snapshots: DatePartitionedStore) -> list[str]:
     raise SourceError("유니버스 없음: stock_info/candles_1d 부재")
 
 
+def _backfill_symbols(
+    snapshots: DatePartitionedStore,
+    delisting: pl.DataFrame | None,
+    start: date,
+) -> list[str]:
+    universe = set(_universe_symbols(snapshots))
+    if delisting is not None and not delisting.is_empty():
+        floor = max(start, CREDIT_START)
+        universe.update(
+            delisting.filter(
+                pl.col("delisting_date").is_not_null() & (pl.col("delisting_date") >= floor)
+            )
+            .get_column("symbol")
+            .to_list()
+        )
+    return sorted(universe)
+
+
 def _group_by_day(
     results: list[tuple[str, list[dict[str, Any]], datetime]],
     *,
@@ -73,7 +91,11 @@ def _group_by_day(
 
 
 def _day_frame(records: list[dict[str, Any]]) -> pl.DataFrame:
-    return pl.DataFrame(records, schema=CREDIT_BALANCE_1D_SCHEMA).sort("symbol")
+    return (
+        pl.DataFrame(records, schema=CREDIT_BALANCE_1D_SCHEMA)
+        .unique(subset=["symbol"], keep="last")
+        .sort("symbol")
+    )
 
 
 def daily_credit(
@@ -132,11 +154,12 @@ def backfill_credit(
     start: date,
     end: date,
     symbols: list[str] | None = None,
+    delisting: pl.DataFrame | None = None,
     fetch: CreditFetcher | None = None,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> CreditBackfillSummary:
     run_id = state.start_job(JOB)
-    targets = symbols if symbols is not None else _universe_symbols(snapshots)
+    targets = symbols if symbols is not None else _backfill_symbols(snapshots, delisting, start)
     if fetch is None:
         with build_kis_client(cfg) as client:
             summary = _run_backfill(
@@ -228,7 +251,6 @@ def _continuity(frame: pl.DataFrame, symbols_sample: int) -> tuple[int, int]:
         .sort(["symbol", "day"])
         .with_columns(
             pl.col("loan_balance_qty").shift(1).over("symbol").alias("prev_balance"),
-            pl.col("day").shift(1).over("symbol").alias("prev_day"),
         )
         .filter(pl.col("prev_balance").is_not_null())
     )

@@ -1074,6 +1074,7 @@ def credit_backfill(
                 start=start,
                 end=end,
                 symbols=list(symbols) or None,
+                delisting=rt.series.read(DELISTING, "registry"),
                 progress=report,
             )
     click.echo(summary.model_dump_json())
