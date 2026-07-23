@@ -197,6 +197,52 @@ def test_daily_stock_no_universe(cfg, cal, snapshots):
     assert result == "no-universe"
 
 
+def test_daily_stock_drops_unpublished_today_row(cfg, cal, snapshots):
+    today = date(2026, 7, 22)
+    prev = date(2026, 7, 21)
+    write_stock_info(snapshots, [today], ["005930"])
+
+    def fetch(symbol, anchor):
+        today_row = {
+            "day": today,
+            "symbol": symbol,
+            "close": 70000.0,
+            "change_pct": 1.0,
+            "volume": 100000.0,
+            "value": 7_000_000_000.0,
+            "sell_qty": None,
+            "buy_qty": None,
+            "net_qty": None,
+            "sell_value": None,
+            "buy_value": None,
+            "net_value": None,
+        }
+        return [today_row, stock_records(symbol, [prev])[0]]
+
+    now = datetime(2026, 7, 22, 16, 40, tzinfo=KST)
+    result = daily_program_stock(cfg, cal=cal, snapshots=snapshots, now=now, fetch=fetch)
+
+    assert result == "1 days, 1 rows"
+    assert snapshots.read_date(PROGRAM_STOCK_1D, today) is None
+    stored_prev = snapshots.read_date(PROGRAM_STOCK_1D, prev)
+    assert stored_prev.height == 1
+    assert stored_prev["symbol"].to_list() == ["005930"]
+
+
+def test_daily_stock_keeps_published_today_row(cfg, cal, snapshots):
+    today = date(2026, 7, 22)
+    write_stock_info(snapshots, [today], ["005930"])
+
+    def fetch(symbol, anchor):
+        return stock_records(symbol, [today])
+
+    now = datetime(2026, 7, 22, 16, 40, tzinfo=KST)
+    result = daily_program_stock(cfg, cal=cal, snapshots=snapshots, now=now, fetch=fetch)
+
+    assert result == "1 days, 1 rows"
+    assert snapshots.read_date(PROGRAM_STOCK_1D, today).height == 1
+
+
 def test_backfill_stock_walkback_stops_on_short_page(cfg, cal, state, snapshots):
     start = date(2026, 1, 2)
     end = date(2026, 7, 22)
@@ -229,6 +275,33 @@ def test_backfill_stock_walkback_stops_on_short_page(cfg, cal, state, snapshots)
     assert summary.loaded == 1
     stored = snapshots.scan(PROGRAM_STOCK_1D).collect()
     assert stored.filter(pl.col("symbol") == "A").height == 35
+
+
+def test_backfill_stock_resumes_from_stored_min_day(cfg, cal, state, snapshots):
+    start = date(2026, 1, 2)
+    end = date(2026, 7, 22)
+    sessions = cal.sessions_between(start, end)
+    cliff = sessions[40]
+    seed = pl.DataFrame(
+        [{**stock_records("C", [cliff])[0], "fetched_at": FETCHED}],
+        schema=PROGRAM_STOCK_1D_SCHEMA,
+    )
+    snapshots.upsert_date(PROGRAM_STOCK_1D, cliff, seed, ("symbol",))
+
+    calls = []
+
+    def fetch(symbol, anchor):
+        calls.append((symbol, anchor))
+        return []
+
+    summary = backfill_program_stock(
+        cfg, cal=cal, state=state, snapshots=snapshots, start=start, end=end,
+        symbols=["C"], fetch=fetch,
+    )
+
+    assert calls == [("C", cal.previous_trading_day(cliff))]
+    assert summary.skipped == 0
+    assert summary.loaded == 1
 
 
 def test_verify_market_flags_broken_identity(cfg, cal, snapshots):
