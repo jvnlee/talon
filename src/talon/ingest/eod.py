@@ -23,6 +23,7 @@ from talon.errors import SourceError
 from talon.ingest.actions import daily_actions
 from talon.ingest.flows import daily_flows
 from talon.ingest.kis_minutes import daily_kis_minutes
+from talon.ingest.kr_events import daily_kr_events
 from talon.ingest.shorting import daily_shorting
 from talon.ingest.universe import candidate_symbols, rebuild_universe
 from talon.ingest.vkospi import VKOSPI_NAME, daily_vkospi
@@ -116,6 +117,7 @@ def _run_eod_steps(
     _load_vkospi(cfg, cal, series, snapshots, day, steps)
     _load_shorting(cfg, cal, snapshots, steps)
     _load_market_actions(cfg, cal, snapshots, steps)
+    _load_kr_events(cfg, cal, snapshots, series, day, steps)
     _load_kis_minutes(cfg, cal, snapshots, steps)
     if source == "pykrx":
         _run_crosscheck(cfg, ohlcv, liquidity, day, steps, alerter)
@@ -396,6 +398,24 @@ def _load_market_actions(
     except Exception as exc:
         steps["actions"] = f"error: {exc}"
         log.warning("market actions errors: %s", exc)
+
+
+def _load_kr_events(
+    cfg: TalonSettings,
+    cal: KrxCalendar,
+    snapshots: DatePartitionedStore,
+    series: ParquetStore,
+    day: date,
+    steps: dict[str, str],
+) -> None:
+    try:
+        summary = daily_kr_events(
+            cfg, cal=cal, snapshots=snapshots, series=series, today=day
+        )
+        steps["kr_events"] = f"snapshot {summary.snapshot_rows}, history {summary.history_rows}"
+    except Exception as exc:
+        steps["kr_events"] = f"error: {exc}"
+        log.warning("kr events errors: %s", exc)
 
 
 def _load_kis_minutes(

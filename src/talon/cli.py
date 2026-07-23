@@ -70,6 +70,11 @@ from talon.ingest.kis_minutes import (
     probe_kis_minutes,
     verify_kis_minutes,
 )
+from talon.ingest.kr_events import (
+    backfill_kr_events,
+    daily_kr_events,
+    verify_kr_events,
+)
 from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
 from talon.ingest.overtime import run_overtime
 from talon.ingest.shorting import (
@@ -801,6 +806,53 @@ def actions_verify(parts: tuple[str, ...]) -> None:
     cfg = load_settings()
     with runtime(cfg, toss="skip") as rt:
         report = verify_actions(cfg, snapshots=rt.snapshots, parts=parts or ALL_PARTS)
+    click.echo(report.model_dump_json(indent=2))
+
+
+@main.group()
+def events() -> None:
+    """KR 결정론적 이벤트 캘린더 (만기·리밸런싱·배당락·연말연시)."""
+
+
+@events.command("backfill")
+def events_backfill() -> None:
+    cfg = load_settings()
+    with job_lock(cfg.locks_dir / "events-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("events backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = backfill_kr_events(
+                cfg, cal=rt.cal, state=rt.state, snapshots=rt.snapshots, series=rt.series
+            )
+    click.echo(summary.model_dump_json())
+
+
+@events.command("daily")
+@click.option("--day", "day_text", default=None, help="YYYY-MM-DD (재처리용)")
+def events_daily(day_text: str | None) -> None:
+    cfg = load_settings()
+    day = date.fromisoformat(day_text) if day_text else None
+    with job_lock(cfg.locks_dir / "events-daily.lock") as acquired:
+        if not acquired:
+            click.echo("events daily가 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            summary = daily_kr_events(
+                cfg,
+                cal=rt.cal,
+                snapshots=rt.snapshots,
+                series=rt.series,
+                today=day,
+            )
+    click.echo(summary.model_dump_json())
+
+
+@events.command("verify")
+def events_verify() -> None:
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        report = verify_kr_events(cfg, cal=rt.cal, snapshots=rt.snapshots, series=rt.series)
     click.echo(report.model_dump_json(indent=2))
 
 

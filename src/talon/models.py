@@ -227,6 +227,27 @@ class ActionsVerifyReport(BaseModel):
     coverage: dict[str, str] = {}
 
 
+class KrEventsBackfillSummary(BaseModel):
+    status: str
+    day: date | None = None
+    snapshot_rows: int = 0
+    history_rows: int = 0
+
+
+class KrEventsDailySummary(BaseModel):
+    status: str
+    day: date | None = None
+    snapshot_rows: int = 0
+    history_rows: int = 0
+
+
+class KrEventsVerifyReport(BaseModel):
+    status: str
+    snapshot: str = ""
+    history: str = ""
+    counts: dict[str, int] = {}
+
+
 class KisMinutesBackfillSummary(BaseModel):
     status: str
     sessions: int = 0

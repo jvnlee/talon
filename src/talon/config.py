@@ -114,6 +114,7 @@ class TalonSettings(BaseSettings):
     us_eod_overlap_days: int = 10
     us_events_forward_days: int = 40
     us_earnings_forward_days: int = 45
+    kr_events_forward_days: int = 40
     us_source_throttle_seconds: float = 0.5
 
     fred_api_key: str = ""
