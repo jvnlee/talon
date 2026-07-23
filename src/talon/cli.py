@@ -87,6 +87,14 @@ from talon.ingest.kr_events import (
 )
 from talon.ingest.minutes import DEFAULT_MAX_PAGES, backfill_minutes
 from talon.ingest.overtime import run_overtime
+from talon.ingest.program import (
+    MARKET_START,
+    backfill_program_market,
+    backfill_program_stock,
+    daily_program_market,
+    daily_program_stock,
+    verify_program,
+)
 from talon.ingest.shorting import (
     DATASET_NAMES,
     backfill_shorting,
@@ -933,6 +941,97 @@ def events_verify() -> None:
     with runtime(cfg, toss="skip") as rt:
         report = verify_kr_events(cfg, cal=rt.cal, snapshots=rt.snapshots, series=rt.series)
     click.echo(report.model_dump_json(indent=2))
+
+
+_PROGRAM_PART_CHOICE = click.Choice(["market", "stock"])
+
+
+@main.group()
+def program() -> None:
+    """프로그램매매 (KRX 시장단위 차익/비차익 + KIS 종목별)."""
+
+
+@program.command("backfill")
+@click.option("--part", type=_PROGRAM_PART_CHOICE, default="market", show_default=True)
+@click.option("--start", "start_text", default=None, help="YYYY-MM-DD")
+@click.option("--end", "end_text", default=None, help="YYYY-MM-DD")
+def program_backfill(part: str, start_text: str | None, end_text: str | None) -> None:
+    cfg = load_settings()
+    if part == "market" and not cfg.krx_login_configured:
+        raise click.ClickException("TALON_KRX_ID / TALON_KRX_PASSWORD 설정이 필요합니다")
+    if part == "stock" and not cfg.kis_configured:
+        raise click.ClickException("TALON_KIS_APP_KEY / TALON_KIS_APP_SECRET 설정이 필요합니다")
+    with job_lock(cfg.locks_dir / "program-backfill.lock") as acquired:
+        if not acquired:
+            click.echo("program backfill이 이미 실행 중입니다")
+            return
+        with runtime(cfg, toss="skip") as rt:
+            start = date.fromisoformat(start_text) if start_text else MARKET_START
+            end = (
+                date.fromisoformat(end_text)
+                if end_text
+                else rt.cal.previous_trading_day(_today_kst())
+            )
+            if end < start:
+                raise click.ClickException("종료일이 시작일보다 빠릅니다")
+            if part == "market":
+
+                def report(index: int, total: int, day: date) -> None:
+                    if index == total or (day.month == 1 and day.day <= 3):
+                        click.echo(f"{index}/{total} {day}")
+
+                summary = backfill_program_market(
+                    cfg,
+                    cal=rt.cal,
+                    state=rt.state,
+                    snapshots=rt.snapshots,
+                    start=start,
+                    end=end,
+                    progress=report,
+                )
+            else:
+                summary = backfill_program_stock(
+                    cfg,
+                    cal=rt.cal,
+                    state=rt.state,
+                    snapshots=rt.snapshots,
+                    start=start,
+                    end=end,
+                )
+    click.echo(summary.model_dump_json())
+    if summary.status not in {"ok", "partial"}:
+        sys.exit(1)
+
+
+@program.command("daily")
+@click.option("--part", "parts", multiple=True, type=_PROGRAM_PART_CHOICE)
+def program_daily(parts: tuple[str, ...]) -> None:
+    cfg = load_settings()
+    selected = parts or ("market", "stock")
+    with runtime(cfg, toss="skip") as rt:
+        result: dict[str, str] = {}
+        if "market" in selected:
+            if cfg.krx_login_configured:
+                result["market"] = daily_program_market(cfg, cal=rt.cal, snapshots=rt.snapshots)
+            else:
+                result["market"] = "skipped-no-krx-login"
+        if "stock" in selected:
+            if cfg.kis_configured:
+                result["stock"] = daily_program_stock(cfg, cal=rt.cal, snapshots=rt.snapshots)
+            else:
+                result["stock"] = "skipped-no-kis-key"
+    click.echo(json.dumps(result, ensure_ascii=False))
+
+
+@program.command("verify")
+@click.option("--part", "parts", multiple=True, type=_PROGRAM_PART_CHOICE)
+def program_verify(parts: tuple[str, ...]) -> None:
+    cfg = load_settings()
+    with runtime(cfg, toss="skip") as rt:
+        report = verify_program(cfg, snapshots=rt.snapshots, parts=parts or ("market", "stock"))
+    click.echo(report.model_dump_json(indent=2))
+    if report.status != "ok":
+        sys.exit(1)
 
 
 @main.group("kis-minutes")

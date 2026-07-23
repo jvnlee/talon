@@ -26,6 +26,7 @@ from talon.ingest.dart_times import daily_dart_times
 from talon.ingest.flows import daily_flows
 from talon.ingest.kis_minutes import daily_kis_minutes
 from talon.ingest.kr_events import daily_kr_events
+from talon.ingest.program import daily_program_market, daily_program_stock
 from talon.ingest.shorting import daily_shorting
 from talon.ingest.universe import candidate_symbols, rebuild_universe
 from talon.ingest.usfut import daily_usfut
@@ -122,6 +123,8 @@ def _run_eod_steps(
     _load_market_actions(cfg, cal, snapshots, steps)
     _load_kr_events(cfg, cal, snapshots, series, day, steps)
     _load_credit(cfg, snapshots, steps)
+    _load_program_market(cfg, cal, snapshots, steps)
+    _load_program_stock(cfg, cal, snapshots, steps)
     _load_kis_minutes(cfg, cal, snapshots, steps)
     _load_usfut(cfg, snapshots, steps)
     _load_dart_times(cfg, cal, snapshots, steps)
@@ -437,6 +440,38 @@ def _load_credit(
     except Exception as exc:
         steps["credit"] = f"error: {exc}"
         log.warning("credit errors: %s", exc)
+
+
+def _load_program_market(
+    cfg: TalonSettings,
+    cal: KrxCalendar,
+    snapshots: DatePartitionedStore,
+    steps: dict[str, str],
+) -> None:
+    if not cfg.krx_login_configured:
+        steps["program_market"] = "skipped-no-krx-login"
+        return
+    try:
+        steps["program_market"] = daily_program_market(cfg, cal=cal, snapshots=snapshots)
+    except Exception as exc:
+        steps["program_market"] = f"error: {exc}"
+        log.warning("program market errors: %s", exc)
+
+
+def _load_program_stock(
+    cfg: TalonSettings,
+    cal: KrxCalendar,
+    snapshots: DatePartitionedStore,
+    steps: dict[str, str],
+) -> None:
+    if not cfg.kis_configured:
+        steps["program_stock"] = "skipped-no-kis-key"
+        return
+    try:
+        steps["program_stock"] = daily_program_stock(cfg, cal=cal, snapshots=snapshots)
+    except Exception as exc:
+        steps["program_stock"] = f"error: {exc}"
+        log.warning("program stock errors: %s", exc)
 
 
 def _load_kis_minutes(
